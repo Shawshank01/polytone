@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.1.3
+// @version      0.1.4
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
@@ -293,6 +293,7 @@
   // ==================== Input Reading & Framework-Compatible Writing ====================
   const TEXT_INPUT_TYPES = ['text', 'search', 'email', 'url'];
   const LEXICAL_EDITOR_SELECTOR = '[data-lexical-editor="true"]';
+  const DRAFT_EDITOR_SELECTOR = '.public-DraftEditor-content, [data-testid^="tweetTextarea_"]';
 
   function isEditableElement(el) {
     if (!el || el.nodeType !== 1) return false;
@@ -329,27 +330,44 @@
         return block.innerText ?? block.textContent ?? '';
       }).join('\n');
     }
+    if (el.closest(DRAFT_EDITOR_SELECTOR)) {
+      const blocks = el.querySelectorAll(':scope > [data-contents="true"] [data-block="true"]');
+      if (blocks.length) {
+        // Read Draft.js blocks directly to exclude line breaks added for rendering.
+        return Array.from(blocks, (block) => {
+          const text = block.textContent;
+          return text === '\n' ? '' : text.replace(/\n\n$/, '\n');
+        }).join('\n');
+      }
+    }
     return el.innerText ?? el.textContent ?? '';
   }
 
-  async function replaceLexicalText(el, newText, expectedText) {
+  async function replaceManagedEditorText(el, newText, expectedText, usePaste) {
     const selection = window.getSelection();
     if (!selection) return false;
     const previousRange = selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
     const dataTransfer = new DataTransfer();
     dataTransfer.setData('text/plain', newText);
 
-    // Let Lexical update its document model and reconcile the DOM it owns.
+    const eventOptions = { bubbles: true, cancelable: true, composed: true };
+    const replacement = usePaste
+      ? new ClipboardEvent('paste', { ...eventOptions, clipboardData: dataTransfer })
+      : new InputEvent('beforeinput', {
+        ...eventOptions,
+        inputType: 'insertReplacementText',
+        data: newText, // WebKit may omit dataTransfer on a synthetic InputEvent.
+        dataTransfer
+      });
+
     selection.selectAllChildren(el);
-    el.dispatchEvent(new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      inputType: 'insertReplacementText',
-      data: newText, // WebKit may omit dataTransfer on a synthetic InputEvent.
-      dataTransfer
-    }));
-    await Promise.resolve(); // Lexical can commit the edit in a microtask.
+    if (usePaste) {
+      // Draft.js applies a paste to its cached selection, so sync it before dispatching.
+      el.ownerDocument.dispatchEvent(new Event('selectionchange'));
+      if (getFocusedEditor() !== el || getElementText(el) !== expectedText) return false;
+    }
+    el.dispatchEvent(replacement);
+    await Promise.resolve(); // The editor can commit the edit in a microtask.
 
     if (getElementText(el) !== expectedText) return true;
     if (getFocusedEditor() === el) {
@@ -383,8 +401,9 @@
       return true;
     }
 
-    if (el.matches(LEXICAL_EDITOR_SELECTOR)) {
-      return replaceLexicalText(el, newText, expectedText);
+    const isLexical = el.matches(LEXICAL_EDITOR_SELECTOR);
+    if (isLexical || el.closest(DRAFT_EDITOR_SELECTOR)) {
+      return replaceManagedEditorText(el, newText, expectedText, !isLexical);
     }
 
     el.innerText = newText;
