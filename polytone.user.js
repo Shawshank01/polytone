@@ -5,8 +5,8 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.0.4
-// @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs
+// @version      0.0.5
+// @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
@@ -37,12 +37,11 @@
     geminiModel: 'gemini-3.5-flash-lite',
     openaiBaseUrl: 'https://api.openai.com/v1',
     openaiApiKey: '',
-    openaiModel: 'gpt-4o-mini',
+    openaiModel: 'gpt-6-luna',
     targetLang: 'English',
     activeTone: 'natural',
     customTonePrompt: '',
-    interceptEnter: false, // Whether to intercept Enter key to auto-transform and send
-    temperature: 0.7
+    interceptEnter: false // Whether to intercept Enter key to auto-transform and send
   };
 
   const TONE_PRESETS = {
@@ -197,8 +196,7 @@
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userText }
-        ],
-        temperature: Number(cfg.temperature) || 0.7
+        ]
       };
 
       const data = await crossOriginPost(url, headers, body);
@@ -232,10 +230,7 @@
             role: 'user',
             parts: [{ text: userText }]
           }
-        ],
-        generationConfig: {
-          temperature: Number(cfg.temperature) || 0.7
-        }
+        ]
       };
 
       const data = await crossOriginPost(url, headers, body);
@@ -253,12 +248,11 @@
         Authorization: `Bearer ${cfg.openaiApiKey.trim()}`
       };
       const body = {
-        model: cfg.openaiModel.trim() || 'gpt-4o-mini',
+        model: cfg.openaiModel.trim() || 'gpt-6-luna',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userText }
-        ],
-        temperature: Number(cfg.temperature) || 0.7
+        ]
       };
 
       const data = await crossOriginPost(url, headers, body);
@@ -591,7 +585,7 @@
           </div>
           <div class="field">
             <label>Model Name</label>
-            <input type="text" id="cfg-openai-model" placeholder="gpt-4o-mini / deepseek-chat" />
+            <input type="text" id="cfg-openai-model" placeholder="gpt-6-luna / deepseek-chat" />
           </div>
         </div>
 
@@ -915,7 +909,7 @@
       geminiModel: shadow.getElementById('cfg-gemini-model').value.trim() || 'gemini-3.5-flash-lite',
       openaiBaseUrl: shadow.getElementById('cfg-openai-url').value.trim() || 'https://api.openai.com/v1',
       openaiApiKey: shadow.getElementById('cfg-openai-key').value.trim(),
-      openaiModel: shadow.getElementById('cfg-openai-model').value.trim() || 'gpt-4o-mini',
+      openaiModel: shadow.getElementById('cfg-openai-model').value.trim() || 'gpt-6-luna',
       customTonePrompt: shadow.getElementById('cfg-custom-prompt').value,
       interceptEnter: shadow.getElementById('cfg-intercept-enter').checked
     };

@@ -7,7 +7,7 @@
 - **Multiple AI Providers**
   - **Cohere** (Native v2 API, default: `command-a-plus-05-2026`)
   - **Google Gemini** (Native API, default: `gemini-3.5-flash-lite`)
-  - **OpenAI-Compatible** (OpenAI, DeepSeek, Ollama, etc., default: `gpt-4o-mini`)
+  - **OpenAI-Compatible** (OpenAI, DeepSeek, Ollama, etc., default: `gpt-6-luna`)
 - **Tone Presets & Custom Persona**: Choose from *Native & Natural*, *Pedantic & Scholarly*, *Aloof & Minimalist*, *Street Slang*, *Dry & Sarcastic*, *Crisp Professional*, or define your own *Custom Persona* prompt.
 - **Target Languages**: `English`, `日本語`, `简体中文`, `繁體中文`, `Español`, `Français`, `Deutsch`, `한국어`.
 - **Keyboard Workflow**: Press `Option+J` (macOS) or `Alt+J` (Windows/Linux) to rewrite in place, click **↩** to undo back to the original text, or enable **Intercept Enter key** in settings to automatically polish and send on `Enter`.
