@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.0.2
+// @version      0.0.3
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -380,8 +380,30 @@
       pointer-events: auto;
       transition: opacity 0.15s ease;
       user-select: none;
+      touch-action: none;
     }
     .pill.visible { display: flex; }
+    .pill.dragging {
+      transition: none;
+      cursor: grabbing;
+    }
+    .drag-handle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #71717a;
+      font-size: 13px;
+      line-height: 1;
+      padding: 2px 2px 2px 4px;
+      cursor: grab;
+      touch-action: none;
+    }
+    .drag-handle:hover {
+      color: #d4d4d8;
+    }
+    .pill.dragging .drag-handle {
+      cursor: grabbing;
+    }
     .pill select, .pill button {
       background: transparent;
       color: #f4f4f5;
@@ -493,6 +515,7 @@
 
   shadow.innerHTML = `
     <div class="pill" id="pill">
+      <span class="drag-handle" id="drag-handle" title="Drag to move (double-click to reset)">⠿</span>
       <select id="quick-lang" title="Target Language"></select>
       <div class="divider"></div>
       <select id="quick-tone" title="Preset Tone"></select>
@@ -588,6 +611,7 @@
   }
 
   const pill = shadow.getElementById('pill');
+  const dragHandle = shadow.getElementById('drag-handle');
   const quickLang = shadow.getElementById('quick-lang');
   const quickTone = shadow.getElementById('quick-tone');
   const btnRun = shadow.getElementById('btn-run');
@@ -624,6 +648,7 @@
 
   let focusCheckTimer = null;
   let isInteractingWithPill = false;
+  let customPillPos = null;
 
   function hidePill() {
     activeInput = null;
@@ -661,23 +686,76 @@
     }
     pill.classList.add('visible');
     const pillRect = pill.getBoundingClientRect();
-    let top = rect.bottom + 6;
-    if (top + pillRect.height > window.innerHeight - 8) {
-      top = Math.max(8, rect.top - pillRect.height - 6);
+    const maxLeft = Math.max(8, window.innerWidth - pillRect.width - 8);
+    const maxTop = Math.max(8, window.innerHeight - pillRect.height - 8);
+
+    let top;
+    let left;
+    if (customPillPos) {
+      left = Math.min(maxLeft, Math.max(8, customPillPos.left));
+      top = Math.min(maxTop, Math.max(8, customPillPos.top));
+    } else {
+      top = 12;
+      left = Math.min(maxLeft, Math.max(8, (window.innerWidth - pillRect.width) / 2));
     }
-    let left = Math.min(
-      window.innerWidth - pillRect.width - 12,
-      Math.max(8, rect.right - pillRect.width)
-    );
+
     pill.style.top = `${top}px`;
     pill.style.left = `${left}px`;
   }
 
-  // Prevent clicking floating toolbar buttons/background from blurring the active input
+  // Prevent clicking/dragging floating toolbar from blurring the active input
   pill.addEventListener('mousedown', (e) => {
     if (e.target !== quickLang && e.target !== quickTone) {
       e.preventDefault();
     }
+  });
+
+  // Dragging support via drag handle or non-control pill area
+  pill.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('button, select, option')) return;
+
+    const pillRect = pill.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const originLeft = pillRect.left;
+    const originTop = pillRect.top;
+    let moved = false;
+
+    pill.classList.add('dragging');
+
+    const onPointerMove = (moveEvent) => {
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) < 3) return;
+      moved = true;
+
+      const currentRect = pill.getBoundingClientRect();
+      const maxLeft = Math.max(8, window.innerWidth - currentRect.width - 8);
+      const maxTop = Math.max(8, window.innerHeight - currentRect.height - 8);
+      const nextLeft = Math.min(maxLeft, Math.max(8, originLeft + dx));
+      const nextTop = Math.min(maxTop, Math.max(8, originTop + dy));
+
+      customPillPos = { left: nextLeft, top: nextTop };
+      pill.style.left = `${nextLeft}px`;
+      pill.style.top = `${nextTop}px`;
+    };
+
+    const stopDragging = () => {
+      pill.classList.remove('dragging');
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', stopDragging, true);
+      window.removeEventListener('pointercancel', stopDragging, true);
+    };
+
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', stopDragging, true);
+    window.addEventListener('pointercancel', stopDragging, true);
+  });
+
+  dragHandle.addEventListener('dblclick', () => {
+    customPillPos = null;
+    updatePillPosition();
   });
 
   quickLang.addEventListener('change', async () => {
@@ -685,6 +763,7 @@
     config.targetLang = quickLang.value;
     await saveConfig(config);
     if (activeInput) activeInput.focus();
+    updatePillPosition();
   });
 
   quickTone.addEventListener('change', async () => {
@@ -692,6 +771,7 @@
     config.activeTone = quickTone.value;
     await saveConfig(config);
     if (activeInput) activeInput.focus();
+    updatePillPosition();
   });
 
   // ==================== Main Transformation Flow ====================
@@ -707,6 +787,7 @@
     btnRun.disabled = true;
     const prevBtnText = btnRun.textContent;
     btnRun.textContent = '⏳ Processing...';
+    updatePillPosition();
 
     try {
       const targetEl = activeInput;
@@ -737,6 +818,7 @@
       isProcessing = false;
       btnRun.disabled = false;
       btnRun.textContent = prevBtnText;
+      updatePillPosition();
     }
   }
 
@@ -746,6 +828,7 @@
     if (lastModifiedInput && lastOriginalText) {
       setElementText(lastModifiedInput, lastOriginalText);
       btnUndo.style.display = 'none';
+      updatePillPosition();
       showToast('Original text restored', 1800);
     }
   });
