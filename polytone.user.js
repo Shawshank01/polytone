@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.1.2
+// @version      0.1.3
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
@@ -292,6 +292,7 @@
 
   // ==================== Input Reading & Framework-Compatible Writing ====================
   const TEXT_INPUT_TYPES = ['text', 'search', 'email', 'url'];
+  const LEXICAL_EDITOR_SELECTOR = '[data-lexical-editor="true"]';
 
   function isEditableElement(el) {
     if (!el || el.nodeType !== 1) return false;
@@ -321,10 +322,44 @@
     if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
       return el.value || '';
     }
+    if (el.matches(LEXICAL_EDITOR_SELECTOR) && el.children.length) {
+      // Read each block so browser-generated paragraph separators do not become draft text.
+      return Array.from(el.children, (block) => {
+        if (block.childNodes.length === 1 && block.firstChild.nodeName === 'BR') return '';
+        return block.innerText ?? block.textContent ?? '';
+      }).join('\n');
+    }
     return el.innerText ?? el.textContent ?? '';
   }
 
-  function setElementText(el, newText, expectedText) {
+  async function replaceLexicalText(el, newText, expectedText) {
+    const selection = window.getSelection();
+    if (!selection) return false;
+    const previousRange = selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    const dataTransfer = new DataTransfer();
+    dataTransfer.setData('text/plain', newText);
+
+    // Let Lexical update its document model and reconcile the DOM it owns.
+    selection.selectAllChildren(el);
+    el.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      inputType: 'insertReplacementText',
+      data: newText, // WebKit may omit dataTransfer on a synthetic InputEvent.
+      dataTransfer
+    }));
+    await Promise.resolve(); // Lexical can commit the edit in a microtask.
+
+    if (getElementText(el) !== expectedText) return true;
+    if (getFocusedEditor() === el) {
+      selection.removeAllRanges();
+      if (previousRange) selection.addRange(previousRange);
+    }
+    throw new Error('The editor did not accept the replacement');
+  }
+
+  async function setElementText(el, newText, expectedText) {
     if (getFocusedEditor() !== el) {
       el.focus();
       if (getFocusedEditor() !== el) return false;
@@ -346,6 +381,10 @@
       el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
+    }
+
+    if (el.matches(LEXICAL_EDITOR_SELECTOR)) {
+      return replaceLexicalText(el, newText, expectedText);
     }
 
     el.innerText = newText;
@@ -870,7 +909,7 @@
         return;
       }
 
-      if (original !== transformed && !setElementText(input, transformed, original)) {
+      if (original !== transformed && !(await setElementText(input, transformed, original))) {
         showToast('The draft changed while the editor regained focus.');
         return;
       }
@@ -894,16 +933,23 @@
 
   btnRun.addEventListener('click', executeRewrite);
 
-  btnUndo.addEventListener('click', () => {
+  btnUndo.addEventListener('click', async () => {
     if (lastRewrite?.input === activeInput && isCurrentEditor(activeInput) &&
       composingInput !== activeInput && getElementText(activeInput) === lastRewrite.result) {
       const { input, original } = lastRewrite;
-      if (setElementText(input, original, lastRewrite.result)) {
-        lastRewrite = null;
-        showToast('Original text restored', 1800);
+      btnUndo.disabled = true;
+      try {
+        if (await setElementText(input, original, lastRewrite.result)) {
+          lastRewrite = null;
+          showToast('Original text restored', 1800);
+        }
+      } catch (err) {
+        showToast(`Undo failed: ${err?.message || String(err)}`);
+      } finally {
+        btnUndo.disabled = false;
+        updateUndoButton();
+        updatePillPosition();
       }
-      updateUndoButton();
-      updatePillPosition();
     }
   });
 
