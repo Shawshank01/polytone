@@ -5,19 +5,15 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.1.0
+// @version      0.1.1
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
-// @grant        GM_xmlhttpRequest
 // @grant        GM.xmlHttpRequest
-// @grant        GM_setValue
-// @grant        GM_getValue
 // @grant        GM.setValue
 // @grant        GM.getValue
 // @connect      generativelanguage.googleapis.com
 // @connect      api.openai.com
 // @connect      api.cohere.com
-// @connect      api.cohere.ai
 // @connect      *
 // @run-at       document-end
 // ==/UserScript==
@@ -88,18 +84,14 @@
 
   // ==================== Cross-Extension Storage Wrapper ====================
   const CONFIG_KEY = 'ai_rewriter_cfg';
-  const hasLegacyStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
   let canPersistConfig =
-    hasLegacyStorage ||
-    (typeof GM !== 'undefined' && typeof GM.getValue === 'function' && typeof GM.setValue === 'function');
+    typeof GM !== 'undefined' && typeof GM.getValue === 'function' && typeof GM.setValue === 'function';
 
   async function loadConfig() {
     if (!canPersistConfig) return { ...DEFAULT_CONFIG };
     let raw;
     try {
-      raw = hasLegacyStorage
-        ? GM_getValue(CONFIG_KEY, null)
-        : await GM.getValue(CONFIG_KEY, null);
+      raw = await GM.getValue(CONFIG_KEY, null);
     } catch {
       // Preserve existing settings if the extension cannot read them.
       canPersistConfig = false;
@@ -127,11 +119,7 @@
   function saveConfig(cfg) {
     if (!canPersistConfig) return Promise.resolve();
     const serialized = JSON.stringify(cfg);
-    const saved = pendingSave.then(() => {
-      return hasLegacyStorage
-        ? GM_setValue(CONFIG_KEY, serialized)
-        : GM.setValue(CONFIG_KEY, serialized);
-    });
+    const saved = pendingSave.then(() => GM.setValue(CONFIG_KEY, serialized));
     pendingSave = saved.catch(() => { });
     return saved;
   }
@@ -139,28 +127,19 @@
   // ==================== Cross-Origin HTTP Request Wrapper ====================
   async function crossOriginPost(url, headers, bodyObj) {
     const payload = JSON.stringify(bodyObj);
-    const xhrFn =
-      typeof GM_xmlhttpRequest === 'function'
-        ? GM_xmlhttpRequest
-        : typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function'
-          ? GM.xmlHttpRequest.bind(GM)
-          : null;
-
-    if (xhrFn) {
+    if (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function') {
       const res = await new Promise((resolve, reject) => {
-        const request = xhrFn({
+        GM.xmlHttpRequest({
           method: 'POST',
           url,
           headers,
           data: payload,
           responseType: 'text',
           timeout: 30000,
-          onload: resolve,
           onerror: () => reject(new Error('Network request failed')),
           ontimeout: () => reject(new Error('API request timed out (30s)')),
           onabort: () => reject(new Error('API request was canceled'))
-        });
-        if (typeof request?.then === 'function') request.then(resolve, reject);
+        }).then(resolve, reject);
       });
       return parseResponse(res.status, res.responseText);
     }
@@ -369,19 +348,8 @@
       return true;
     }
 
-    // Use the legacy editing command when available to preserve native undo history.
-    const editingCommand = Reflect.get(document, 'execCommand');
-    const selection = window.getSelection();
-    if (selection && typeof editingCommand === 'function') {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      selection.removeAllRanges();
-      selection.addRange(range);
-
-      if (editingCommand.call(document, 'insertText', false, newText)) return true;
-    }
-
     el.innerText = newText;
+    window.getSelection()?.collapse(el, el.childNodes.length);
     el.dispatchEvent(new InputEvent('input', {
       bubbles: true,
       composed: true,
@@ -485,7 +453,7 @@
     .btn-run:disabled { opacity: 0.6; cursor: wait; }
     .undo-icon {
       display: inline-block;
-      transform: scaleY(-1);
+      transform: rotate(180deg);
     }
     .divider {
       width: 1px;
@@ -602,7 +570,7 @@
       <div class="divider"></div>
       <select id="quick-tone" title="Preset Tone"></select>
       <button class="btn-run" id="btn-run" title="Transform & Polish (Option+J / Alt+J)">✨ Polish</button>
-      <button id="btn-undo" title="Undo & Restore Original"><span class="undo-icon">↩</span></button>
+      <button id="btn-undo" title="Undo & Restore Original" aria-label="Undo & Restore Original"><span class="undo-icon" aria-hidden="true">↩︎</span></button>
       <button id="btn-settings" title="API & Advanced Settings">⚙️</button>
     </div>
 
@@ -1061,14 +1029,8 @@
     showToast(canPersistConfig ? 'Settings saved globally ✓' : 'Settings applied for this tab only');
   });
 
-  /** @param {KeyboardEvent} event */
-  function isComposingKey(event) {
-    // Some IME keys report 229 even when isComposing is false.
-    return event.isComposing || Reflect.get(event, 'keyCode') === 229;
-  }
-
   modalBackdrop.addEventListener('keydown', (e) => {
-    if (isComposingKey(e)) return;
+    if (e.isComposing) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -1151,7 +1113,7 @@
   document.addEventListener(
     'keydown',
     (e) => {
-      if (!e.isTrusted || e.defaultPrevented || isComposingKey(e) ||
+      if (!e.isTrusted || e.defaultPrevented || e.isComposing ||
         !isCurrentEditor(activeInput) || composingInput === activeInput) return;
 
       // Shortcut Option + J (Mac) / Alt + J (Win/Linux) to transform in place
