@@ -695,8 +695,15 @@
       left = Math.min(maxLeft, Math.max(8, customPillPos.left));
       top = Math.min(maxTop, Math.max(8, customPillPos.top));
     } else {
-      top = 12;
-      left = Math.min(maxLeft, Math.max(8, (window.innerWidth - pillRect.width) / 2));
+      top = rect.top - pillRect.height - 6;
+      if (top < 8) {
+        const below = rect.bottom + 6;
+        top = below + pillRect.height <= window.innerHeight - 8 ? below : 8;
+      }
+      left = Math.min(
+        window.innerWidth - pillRect.width - 12,
+        Math.max(8, rect.right - pillRect.width)
+      );
     }
 
     pill.style.top = `${top}px`;
