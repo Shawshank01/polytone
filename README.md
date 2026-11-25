@@ -19,14 +19,11 @@
 1. Install the [**Tampermonkey**](https://www.tampermonkey.net/) browser extension.
 2. Click the direct install link: [https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js](https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js).
    Tampermonkey will detect the `.user.js` metadata and prompt you to click **Install** (and keep it updated via `@updateURL` / `@downloadURL`).
-   - *Alternative*: Open the Tampermonkey Dashboard → **+** (Create a new script), replace the template with the contents of [`polytone.user.js`](./polytone.user.js), and save (`Cmd+S` / `Ctrl+S`).
 
 ### Userscripts (Safari on macOS / iOS)
 
 1. Install the [**Userscripts**](https://apps.apple.com/us/app/userscripts/id1463298887) app/extension for Safari and enable it in **Safari → Settings → Extensions** (granting access to websites).
-2. Either:
-   - Open [https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js](https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js) in Safari and click the Userscripts extension toolbar icon to install it, **or**
-   - Save [`polytone.user.js`](./polytone.user.js) directly into the folder configured in the Userscripts extension settings.
+2. - Open [https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js](https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js) in Safari and click the Userscripts extension toolbar icon to install it.
 
 ## Usage
 
