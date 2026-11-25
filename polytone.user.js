@@ -30,14 +30,14 @@
 
   // ==================== Default Config & Tone Presets ====================
   const DEFAULT_CONFIG = {
-    provider: 'gemini', // 'gemini' | 'openai' | 'cohere'
+    provider: 'cohere', // 'cohere' | 'gemini' | 'openai'
+    cohereApiKey: '',
+    cohereModel: 'command-a-plus-05-2026',
     geminiApiKey: '',
     geminiModel: 'gemini-3.5-flash-lite',
     openaiBaseUrl: 'https://api.openai.com/v1',
     openaiApiKey: '',
     openaiModel: 'gpt-4o-mini',
-    cohereApiKey: '',
-    cohereModel: 'command-a-plus-05-2026',
     targetLang: 'English',
     activeTone: 'natural',
     customTonePrompt: '',
@@ -182,39 +182,8 @@
     ].join('\n');
   }
 
-  async function transformText(text, cfg) {
-    const systemPrompt = buildSystemPrompt(cfg);
-
-    if (cfg.provider === 'gemini') {
-      if (!cfg.geminiApiKey.trim()) {
-        throw new Error('Please click the gear icon to enter your Gemini API Key first');
-      }
-      const model = encodeURIComponent(cfg.geminiModel.trim() || 'gemini-3.5-flash-lite');
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-      const headers = {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': cfg.geminiApiKey.trim()
-      };
-      const body = {
-        systemInstruction: {
-          parts: [{ text: systemPrompt }]
-        },
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text }]
-          }
-        ],
-        generationConfig: {
-          temperature: Number(cfg.temperature) || 0.7
-        }
-      };
-
-      const data = await crossOriginPost(url, headers, body);
-      const result = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!result) throw new Error('Gemini did not return valid text');
-      return result.trim();
-    } else if (cfg.provider === 'cohere') {
+  async function callProviderAPI(systemPrompt, userText, cfg) {
+    if (cfg.provider === 'cohere') {
       if (!cfg.cohereApiKey.trim()) {
         throw new Error('Please click the gear icon to enter your Cohere API Key first');
       }
@@ -227,7 +196,7 @@
         model: cfg.cohereModel.trim() || 'command-a-plus-05-2026',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: text }
+          { role: 'user', content: userText }
         ],
         temperature: Number(cfg.temperature) || 0.7
       };
@@ -244,6 +213,35 @@
           : '';
       if (!result.trim()) throw new Error('Cohere did not return valid text');
       return result.trim();
+    } else if (cfg.provider === 'gemini') {
+      if (!cfg.geminiApiKey.trim()) {
+        throw new Error('Please click the gear icon to enter your Gemini API Key first');
+      }
+      const model = encodeURIComponent(cfg.geminiModel.trim() || 'gemini-3.5-flash-lite');
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      const headers = {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': cfg.geminiApiKey.trim()
+      };
+      const body = {
+        systemInstruction: {
+          parts: [{ text: systemPrompt }]
+        },
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: userText }]
+          }
+        ],
+        generationConfig: {
+          temperature: Number(cfg.temperature) || 0.7
+        }
+      };
+
+      const data = await crossOriginPost(url, headers, body);
+      const result = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!result) throw new Error('Gemini did not return valid text');
+      return result.trim();
     } else {
       if (!cfg.openaiApiKey.trim()) {
         throw new Error('Please click the gear icon to enter your OpenAI-compatible API Key first');
@@ -258,7 +256,7 @@
         model: cfg.openaiModel.trim() || 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: text }
+          { role: 'user', content: userText }
         ],
         temperature: Number(cfg.temperature) || 0.7
       };
@@ -268,6 +266,10 @@
       if (!result) throw new Error('OpenAI-compatible API did not return valid text');
       return result.trim();
     }
+  }
+
+  async function transformText(text, cfg) {
+    return callProviderAPI(buildSystemPrompt(cfg), text, cfg);
   }
 
   // ==================== Input Reading & Framework-Compatible Writing ====================
@@ -496,6 +498,16 @@
       cursor: pointer;
     }
     .checkbox-row input { width: auto; }
+    .test-status {
+      margin-top: 10px;
+      font-size: 12px;
+      line-height: 1.4;
+      word-break: break-word;
+      display: none;
+    }
+    .test-status.success { display: block; color: #4ade80; }
+    .test-status.error { display: block; color: #f87171; }
+    .test-status.info { display: block; color: #a1a1aa; }
     .modal-actions {
       display: flex;
       justify-content: flex-end;
@@ -509,6 +521,14 @@
       font-size: 13px;
       cursor: pointer;
     }
+    .btn-test {
+      background: #27272a;
+      color: #e4e4e7;
+      border: 1px solid #3f3f46;
+      margin-right: auto;
+    }
+    .btn-test:hover { background: #3f3f46; }
+    .btn-test:disabled { opacity: 0.6; cursor: wait; }
     .btn-cancel { background: #27272a; color: #e4e4e7; }
     .btn-save { background: #3b82f6; color: #fff; font-weight: 600; }
   `;
@@ -532,10 +552,21 @@
         <div class="field">
           <label>API Provider</label>
           <select id="cfg-provider">
+            <option value="cohere">Cohere API (Native v2)</option>
             <option value="gemini">Google Gemini API (Native)</option>
             <option value="openai">OpenAI-Compatible API (OpenAI / DeepSeek / Ollama)</option>
-            <option value="cohere">Cohere API (Native v2)</option>
           </select>
+        </div>
+
+        <div id="cohere-fields">
+          <div class="field">
+            <label>Cohere API Key</label>
+            <input type="password" id="cfg-cohere-key" placeholder="Cohere API Key" />
+          </div>
+          <div class="field">
+            <label>Cohere Model</label>
+            <input type="text" id="cfg-cohere-model" placeholder="command-a-plus-05-2026" />
+          </div>
         </div>
 
         <div id="gemini-fields">
@@ -564,17 +595,6 @@
           </div>
         </div>
 
-        <div id="cohere-fields">
-          <div class="field">
-            <label>Cohere API Key</label>
-            <input type="password" id="cfg-cohere-key" placeholder="Cohere API Key" />
-          </div>
-          <div class="field">
-            <label>Cohere Model</label>
-            <input type="text" id="cfg-cohere-model" placeholder="command-a-plus-05-2026" />
-          </div>
-        </div>
-
         <div class="field">
           <label>Custom Persona Prompt (active when "Custom Persona" is selected)</label>
           <textarea id="cfg-custom-prompt" rows="2" placeholder="e.g., Reply in the voice of a Victorian aristocrat with a touch of refined arrogance."></textarea>
@@ -585,9 +605,12 @@
           <span>Intercept Enter key: automatically transform and send on Enter</span>
         </label>
 
+        <div class="test-status" id="test-status"></div>
+
         <div class="modal-actions">
-          <button class="btn-cancel" id="btn-cancel">Cancel</button>
-          <button class="btn-save" id="btn-save">Save Settings</button>
+          <button class="btn-test" id="btn-test" type="button">Test API</button>
+          <button class="btn-cancel" id="btn-cancel" type="button">Cancel</button>
+          <button class="btn-save" id="btn-save" type="button">Save Settings</button>
         </div>
       </div>
     </div>
@@ -845,31 +868,58 @@
   const geminiFields = shadow.getElementById('gemini-fields');
   const openaiFields = shadow.getElementById('openai-fields');
   const cohereFields = shadow.getElementById('cohere-fields');
+  const testStatusEl = shadow.getElementById('test-status');
+  const btnTest = shadow.getElementById('btn-test');
+
+  function setTestStatus(type, msg) {
+    testStatusEl.className = type ? `test-status ${type}` : 'test-status';
+    testStatusEl.textContent = msg || '';
+  }
 
   function toggleProviderFields() {
     const provider = cfgProvider.value;
+    cohereFields.style.display = provider === 'cohere' ? 'block' : 'none';
     geminiFields.style.display = provider === 'gemini' ? 'block' : 'none';
     openaiFields.style.display = provider === 'openai' ? 'block' : 'none';
-    cohereFields.style.display = provider === 'cohere' ? 'block' : 'none';
   }
 
-  cfgProvider.addEventListener('change', toggleProviderFields);
+  cfgProvider.addEventListener('change', () => {
+    toggleProviderFields();
+    setTestStatus('', '');
+  });
   toggleProviderFields();
 
   btnSettings.addEventListener('click', () => {
     cfgProvider.value = config.provider;
+    shadow.getElementById('cfg-cohere-key').value = config.cohereApiKey;
+    shadow.getElementById('cfg-cohere-model').value = config.cohereModel;
     shadow.getElementById('cfg-gemini-key').value = config.geminiApiKey;
     shadow.getElementById('cfg-gemini-model').value = config.geminiModel;
     shadow.getElementById('cfg-openai-url').value = config.openaiBaseUrl;
     shadow.getElementById('cfg-openai-key').value = config.openaiApiKey;
     shadow.getElementById('cfg-openai-model').value = config.openaiModel;
-    shadow.getElementById('cfg-cohere-key').value = config.cohereApiKey;
-    shadow.getElementById('cfg-cohere-model').value = config.cohereModel;
     shadow.getElementById('cfg-custom-prompt').value = config.customTonePrompt;
     shadow.getElementById('cfg-intercept-enter').checked = config.interceptEnter;
+    setTestStatus('', '');
     toggleProviderFields();
     modalBackdrop.classList.add('open');
   });
+
+  function readModalConfig() {
+    return {
+      ...config,
+      provider: cfgProvider.value,
+      cohereApiKey: shadow.getElementById('cfg-cohere-key').value.trim(),
+      cohereModel: shadow.getElementById('cfg-cohere-model').value.trim() || 'command-a-plus-05-2026',
+      geminiApiKey: shadow.getElementById('cfg-gemini-key').value.trim(),
+      geminiModel: shadow.getElementById('cfg-gemini-model').value.trim() || 'gemini-3.5-flash-lite',
+      openaiBaseUrl: shadow.getElementById('cfg-openai-url').value.trim() || 'https://api.openai.com/v1',
+      openaiApiKey: shadow.getElementById('cfg-openai-key').value.trim(),
+      openaiModel: shadow.getElementById('cfg-openai-model').value.trim() || 'gpt-4o-mini',
+      customTonePrompt: shadow.getElementById('cfg-custom-prompt').value,
+      interceptEnter: shadow.getElementById('cfg-intercept-enter').checked
+    };
+  }
 
   function closeSettingsModal() {
     modalBackdrop.classList.remove('open');
@@ -881,19 +931,33 @@
     }
   }
 
+  btnTest.addEventListener('click', async () => {
+    const draftCfg = readModalConfig();
+    btnTest.disabled = true;
+    const prevText = btnTest.textContent;
+    btnTest.textContent = 'Testing...';
+    setTestStatus('info', 'Testing API connection...');
+    const startedAt = Date.now();
+    try {
+      const reply = await callProviderAPI(
+        'Reply with "OK" only.',
+        'Connection test.',
+        draftCfg
+      );
+      const elapsed = Date.now() - startedAt;
+      setTestStatus('success', `✓ API works (${elapsed}ms): ${reply.slice(0, 80)}`);
+    } catch (err) {
+      setTestStatus('error', `✕ Test failed: ${err.message}`);
+    } finally {
+      btnTest.disabled = false;
+      btnTest.textContent = prevText;
+    }
+  });
+
   shadow.getElementById('btn-cancel').addEventListener('click', closeSettingsModal);
 
   shadow.getElementById('btn-save').addEventListener('click', async () => {
-    config.provider = cfgProvider.value;
-    config.geminiApiKey = shadow.getElementById('cfg-gemini-key').value.trim();
-    config.geminiModel = shadow.getElementById('cfg-gemini-model').value.trim() || 'gemini-3.5-flash-lite';
-    config.openaiBaseUrl = shadow.getElementById('cfg-openai-url').value.trim() || 'https://api.openai.com/v1';
-    config.openaiApiKey = shadow.getElementById('cfg-openai-key').value.trim();
-    config.openaiModel = shadow.getElementById('cfg-openai-model').value.trim() || 'gpt-4o-mini';
-    config.cohereApiKey = shadow.getElementById('cfg-cohere-key').value.trim();
-    config.cohereModel = shadow.getElementById('cfg-cohere-model').value.trim() || 'command-a-plus-05-2026';
-    config.customTonePrompt = shadow.getElementById('cfg-custom-prompt').value;
-    config.interceptEnter = shadow.getElementById('cfg-intercept-enter').checked;
+    config = readModalConfig();
     await saveConfig(config);
     closeSettingsModal();
     showToast('Settings saved globally ✓');
