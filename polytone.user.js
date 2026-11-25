@@ -124,8 +124,8 @@
       typeof GM_xmlhttpRequest === 'function'
         ? GM_xmlhttpRequest
         : typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function'
-        ? GM.xmlHttpRequest
-        : null;
+          ? GM.xmlHttpRequest
+          : null;
 
     if (xhrFn) {
       return new Promise((resolve, reject) => {
@@ -236,12 +236,12 @@
       const contentBlocks = data?.message?.content;
       const result = Array.isArray(contentBlocks)
         ? contentBlocks
-            .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-            .map((block) => block.text)
-            .join('')
+          .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+          .map((block) => block.text)
+          .join('')
         : typeof contentBlocks === 'string'
-        ? contentBlocks
-        : '';
+          ? contentBlocks
+          : '';
       if (!result.trim()) throw new Error('Cohere did not return valid text');
       return result.trim();
     } else {
@@ -590,9 +590,36 @@
     }, duration);
   }
 
+  let focusCheckTimer = null;
+  let isInteractingWithPill = false;
+
+  function hidePill() {
+    activeInput = null;
+    isInteractingWithPill = false;
+    pill.classList.remove('visible');
+  }
+
+  function isFocusWithinActiveOrUI() {
+    const active = document.activeElement;
+    if (!active) return false;
+    if (active === host || host.contains(active)) return true;
+    if (activeInput && (active === activeInput || activeInput.contains(active))) return true;
+    return isEditableElement(active);
+  }
+
+  function scheduleFocusCheck() {
+    clearTimeout(focusCheckTimer);
+    focusCheckTimer = setTimeout(() => {
+      if (modalBackdrop.classList.contains('open') || isInteractingWithPill) return;
+      if (!isFocusWithinActiveOrUI()) {
+        hidePill();
+      }
+    }, 0);
+  }
+
   function updatePillPosition() {
     if (!activeInput || !document.body.contains(activeInput)) {
-      pill.classList.remove('visible');
+      hidePill();
       return;
     }
     const rect = activeInput.getBoundingClientRect();
@@ -614,18 +641,22 @@
     pill.style.left = `${left}px`;
   }
 
-  // Prevent clicking floating toolbar buttons from blurring the active input
-  [btnRun, btnUndo, btnSettings].forEach((btn) => {
-    btn.addEventListener('mousedown', (e) => e.preventDefault());
+  // Prevent clicking floating toolbar buttons/background from blurring the active input
+  pill.addEventListener('mousedown', (e) => {
+    if (e.target !== quickLang && e.target !== quickTone) {
+      e.preventDefault();
+    }
   });
 
   quickLang.addEventListener('change', async () => {
+    isInteractingWithPill = false;
     config.targetLang = quickLang.value;
     await saveConfig(config);
     if (activeInput) activeInput.focus();
   });
 
   quickTone.addEventListener('change', async () => {
+    isInteractingWithPill = false;
     config.activeTone = quickTone.value;
     await saveConfig(config);
     if (activeInput) activeInput.focus();
@@ -717,9 +748,17 @@
     modalBackdrop.classList.add('open');
   });
 
-  shadow.getElementById('btn-cancel').addEventListener('click', () => {
+  function closeSettingsModal() {
     modalBackdrop.classList.remove('open');
-  });
+    if (activeInput && document.body.contains(activeInput)) {
+      activeInput.focus();
+      updatePillPosition();
+    } else {
+      hidePill();
+    }
+  }
+
+  shadow.getElementById('btn-cancel').addEventListener('click', closeSettingsModal);
 
   shadow.getElementById('btn-save').addEventListener('click', async () => {
     config.provider = cfgProvider.value;
@@ -733,14 +772,32 @@
     config.customTonePrompt = shadow.getElementById('cfg-custom-prompt').value;
     config.interceptEnter = shadow.getElementById('cfg-intercept-enter').checked;
     await saveConfig(config);
-    modalBackdrop.classList.remove('open');
+    closeSettingsModal();
     showToast('Settings saved globally ✓');
   });
 
   // ==================== Global Event Listeners ====================
   document.addEventListener(
+    'pointerdown',
+    (e) => {
+      const path = e.composedPath ? e.composedPath() : [];
+      if (path.includes(host) || e.target === host) {
+        isInteractingWithPill = path.includes(quickLang) || path.includes(quickTone);
+        return;
+      }
+      isInteractingWithPill = false;
+      if (activeInput && !path.includes(activeInput) && !activeInput.contains(e.target)) {
+        scheduleFocusCheck();
+      }
+    },
+    true
+  );
+
+  document.addEventListener(
     'focusin',
     (e) => {
+      clearTimeout(focusCheckTimer);
+      isInteractingWithPill = false;
       const target = e.target;
       if (isEditableElement(target)) {
         activeInput = target;
@@ -748,7 +805,17 @@
           btnUndo.style.display = 'none';
         }
         updatePillPosition();
+      } else if (!e.composedPath?.().includes(host) && !modalBackdrop.classList.contains('open')) {
+        hidePill();
       }
+    },
+    true
+  );
+
+  document.addEventListener(
+    'focusout',
+    () => {
+      scheduleFocusCheck();
     },
     true
   );
