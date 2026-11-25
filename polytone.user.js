@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.0.1
+// @version      0.0.2
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -344,147 +344,160 @@
 
   const host = document.createElement('div');
   host.id = 'ai-tone-rewriter-host';
-  host.style.cssText = 'position:fixed;top:0;left:0;z-index:2147483647;pointer-events:none;';
+  host.style.position = 'fixed';
+  host.style.top = '0';
+  host.style.left = '0';
+  host.style.zIndex = '2147483647';
+  host.style.pointerEvents = 'none';
   document.documentElement.appendChild(host);
 
   const shadow = host.attachShadow({ mode: 'open' });
-  shadow.innerHTML = `
-    <style>
-      * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
-      .pill {
-        position: fixed;
-        display: none;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 6px;
-        background: rgba(24, 24, 27, 0.92);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        color: #f4f4f5;
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 999px;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
-        font-size: 12px;
-        pointer-events: auto;
-        transition: opacity 0.15s ease;
-        user-select: none;
-      }
-      .pill.visible { display: flex; }
-      .pill select, .pill button {
-        background: transparent;
-        color: #f4f4f5;
-        border: none;
-        outline: none;
-        font-size: 12px;
-        cursor: pointer;
-        border-radius: 999px;
-        padding: 3px 6px;
-      }
-      .pill select:hover, .pill button:hover {
-        background: rgba(255, 255, 255, 0.12);
-      }
-      .pill select option {
-        background: #18181b;
-        color: #f4f4f5;
-      }
-      .btn-run {
-        background: #3b82f6 !important;
-        color: #fff !important;
-        font-weight: 600;
-        padding: 3px 10px !important;
-      }
-      .btn-run:hover { background: #2563eb !important; }
-      .btn-run:disabled { opacity: 0.6; cursor: wait; }
-      .divider {
-        width: 1px;
-        height: 14px;
-        background: rgba(255, 255, 255, 0.16);
-      }
-      .toast {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        background: #18181b;
-        color: #fff;
-        padding: 10px 14px;
-        border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.15);
-        font-size: 13px;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.35);
-        pointer-events: auto;
-        display: none;
-        max-width: 340px;
-        line-height: 1.4;
-      }
-      .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.55);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        pointer-events: auto;
-      }
-      .modal-backdrop.open { display: flex; }
-      .modal {
-        background: #18181b;
-        color: #f4f4f5;
-        width: 420px;
-        max-width: 92vw;
-        border-radius: 14px;
-        border: 1px solid rgba(255,255,255,0.14);
-        padding: 18px 20px;
-        box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-      }
-      .modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
-      .field { margin-bottom: 11px; }
-      .field label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
-      .field input, .field select, .field textarea {
-        width: 100%;
-        background: #27272a;
-        color: #f4f4f5;
-        border: 1px solid #3f3f46;
-        border-radius: 8px;
-        padding: 7px 10px;
-        font-size: 13px;
-        outline: none;
-      }
-      .field input:focus, .field select:focus, .field textarea:focus {
-        border-color: #3b82f6;
-      }
-      .checkbox-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 12px;
-        color: #d4d4d8;
-        margin-top: 6px;
-        cursor: pointer;
-      }
-      .checkbox-row input { width: auto; }
-      .modal-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        margin-top: 16px;
-      }
-      .modal-actions button {
-        padding: 7px 14px;
-        border-radius: 8px;
-        border: none;
-        font-size: 13px;
-        cursor: pointer;
-      }
-      .btn-cancel { background: #27272a; color: #e4e4e7; }
-      .btn-save { background: #3b82f6; color: #fff; font-weight: 600; }
-    </style>
 
+  const SHADOW_CSS = `
+    :host {
+      all: initial;
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 2147483647;
+      pointer-events: none;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
+    .pill {
+      position: fixed;
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px;
+      background: rgba(24, 24, 27, 0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      color: #f4f4f5;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 999px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+      font-size: 12px;
+      pointer-events: auto;
+      transition: opacity 0.15s ease;
+      user-select: none;
+    }
+    .pill.visible { display: flex; }
+    .pill select, .pill button {
+      background: transparent;
+      color: #f4f4f5;
+      border: none;
+      outline: none;
+      font-size: 12px;
+      cursor: pointer;
+      border-radius: 999px;
+      padding: 3px 6px;
+    }
+    .pill select:hover, .pill button:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .pill select option {
+      background: #18181b;
+      color: #f4f4f5;
+    }
+    .btn-run {
+      background: #3b82f6 !important;
+      color: #fff !important;
+      font-weight: 600;
+      padding: 3px 10px !important;
+    }
+    .btn-run:hover { background: #2563eb !important; }
+    .btn-run:disabled { opacity: 0.6; cursor: wait; }
+    .divider {
+      width: 1px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.16);
+    }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #18181b;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.15);
+      font-size: 13px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.35);
+      pointer-events: auto;
+      display: none;
+      max-width: 340px;
+      line-height: 1.4;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: #18181b;
+      color: #f4f4f5;
+      width: 420px;
+      max-width: 92vw;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.14);
+      padding: 18px 20px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    }
+    .modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
+    .field { margin-bottom: 11px; }
+    .field label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      background: #27272a;
+      color: #f4f4f5;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus {
+      border-color: #3b82f6;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #d4d4d8;
+      margin-top: 6px;
+      cursor: pointer;
+    }
+    .checkbox-row input { width: auto; }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    .modal-actions button {
+      padding: 7px 14px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-cancel { background: #27272a; color: #e4e4e7; }
+    .btn-save { background: #3b82f6; color: #fff; font-weight: 600; }
+  `;
+
+  shadow.innerHTML = `
     <div class="pill" id="pill">
       <select id="quick-lang" title="Target Language"></select>
       <div class="divider"></div>
       <select id="quick-tone" title="Preset Tone"></select>
       <button class="btn-run" id="btn-run" title="Transform & Polish (Option+J / Alt+J)">✨ Polish</button>
-      <button id="btn-undo" title="Undo & Restore Original" style="display:none;">↩</button>
+      <button id="btn-undo" title="Undo & Restore Original">↩</button>
       <button id="btn-settings" title="API & Advanced Settings">⚙️</button>
     </div>
 
@@ -513,7 +526,7 @@
           </div>
         </div>
 
-        <div id="openai-fields" style="display:none;">
+        <div id="openai-fields">
           <div class="field">
             <label>OpenAI-Compatible Base URL</label>
             <input type="text" id="cfg-openai-url" placeholder="https://api.openai.com/v1" />
@@ -528,7 +541,7 @@
           </div>
         </div>
 
-        <div id="cohere-fields" style="display:none;">
+        <div id="cohere-fields">
           <div class="field">
             <label>Cohere API Key</label>
             <input type="password" id="cfg-cohere-key" placeholder="Cohere API Key" />
@@ -557,6 +570,23 @@
     </div>
   `;
 
+  // Use Constructable Stylesheets so strict CSP style-src sites (e.g. Mastodon) allow Shadow DOM styling
+  if ('adoptedStyleSheets' in shadow && typeof CSSStyleSheet === 'function') {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(SHADOW_CSS);
+      shadow.adoptedStyleSheets = [sheet];
+    } catch {
+      const styleEl = document.createElement('style');
+      styleEl.textContent = SHADOW_CSS;
+      shadow.appendChild(styleEl);
+    }
+  } else {
+    const styleEl = document.createElement('style');
+    styleEl.textContent = SHADOW_CSS;
+    shadow.appendChild(styleEl);
+  }
+
   const pill = shadow.getElementById('pill');
   const quickLang = shadow.getElementById('quick-lang');
   const quickTone = shadow.getElementById('quick-tone');
@@ -565,6 +595,8 @@
   const btnSettings = shadow.getElementById('btn-settings');
   const toastEl = shadow.getElementById('toast');
   const modalBackdrop = shadow.getElementById('modal-backdrop');
+
+  btnUndo.style.display = 'none';
 
   // Initialize dropdown options
   TARGET_LANGUAGES.forEach((lang) => {
@@ -732,6 +764,7 @@
   }
 
   cfgProvider.addEventListener('change', toggleProviderFields);
+  toggleProviderFields();
 
   btnSettings.addEventListener('click', () => {
     cfgProvider.value = config.provider;
