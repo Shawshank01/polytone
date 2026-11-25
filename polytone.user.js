@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.0.6
+// @version      0.1.0
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM_xmlhttpRequest
@@ -22,7 +22,7 @@
 // @run-at       document-end
 // ==/UserScript==
 
-(function () {
+(async function () {
   'use strict';
 
   // Avoid duplicate mounting in ad iframes or tiny frames
@@ -41,7 +41,7 @@
     targetLang: 'English',
     activeTone: 'natural',
     customTonePrompt: '',
-    interceptEnter: false // Whether to intercept Enter key to auto-transform and send
+    interceptEnter: false
   };
 
   const TONE_PRESETS = {
@@ -87,88 +87,120 @@
   ];
 
   // ==================== Cross-Extension Storage Wrapper ====================
+  const CONFIG_KEY = 'ai_rewriter_cfg';
+  const hasLegacyStorage = typeof GM_getValue === 'function' && typeof GM_setValue === 'function';
+  let canPersistConfig =
+    hasLegacyStorage ||
+    (typeof GM !== 'undefined' && typeof GM.getValue === 'function' && typeof GM.setValue === 'function');
+
   async function loadConfig() {
+    if (!canPersistConfig) return { ...DEFAULT_CONFIG };
+    let raw;
     try {
-      let raw = null;
-      if (typeof GM_getValue === 'function') {
-        raw = GM_getValue('ai_rewriter_cfg', null);
-      } else if (typeof GM !== 'undefined' && typeof GM.getValue === 'function') {
-        raw = await GM.getValue('ai_rewriter_cfg', null);
-      } else {
-        raw = localStorage.getItem('ai_rewriter_cfg');
-      }
-      if (!raw) return { ...DEFAULT_CONFIG };
+      raw = hasLegacyStorage
+        ? GM_getValue(CONFIG_KEY, null)
+        : await GM.getValue(CONFIG_KEY, null);
+    } catch {
+      // Preserve existing settings if the extension cannot read them.
+      canPersistConfig = false;
+      return { ...DEFAULT_CONFIG };
+    }
+    try {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      return { ...DEFAULT_CONFIG, ...parsed };
+      const loaded = { ...DEFAULT_CONFIG, ...parsed };
+      for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
+        if (typeof loaded[key] !== typeof value) loaded[key] = value;
+      }
+      if (!['cohere', 'gemini', 'openai'].includes(loaded.provider)) loaded.provider = DEFAULT_CONFIG.provider;
+      if (!TARGET_LANGUAGES.includes(loaded.targetLang)) loaded.targetLang = DEFAULT_CONFIG.targetLang;
+      if (!Object.prototype.hasOwnProperty.call(TONE_PRESETS, loaded.activeTone)) {
+        loaded.activeTone = DEFAULT_CONFIG.activeTone;
+      }
+      return loaded;
     } catch {
       return { ...DEFAULT_CONFIG };
     }
   }
 
-  async function saveConfig(cfg) {
+  let pendingSave = Promise.resolve();
+
+  function saveConfig(cfg) {
+    if (!canPersistConfig) return Promise.resolve();
     const serialized = JSON.stringify(cfg);
-    if (typeof GM_setValue === 'function') {
-      GM_setValue('ai_rewriter_cfg', serialized);
-    } else if (typeof GM !== 'undefined' && typeof GM.setValue === 'function') {
-      await GM.setValue('ai_rewriter_cfg', serialized);
-    } else {
-      localStorage.setItem('ai_rewriter_cfg', serialized);
-    }
+    const saved = pendingSave.then(() => {
+      return hasLegacyStorage
+        ? GM_setValue(CONFIG_KEY, serialized)
+        : GM.setValue(CONFIG_KEY, serialized);
+    });
+    pendingSave = saved.catch(() => { });
+    return saved;
   }
 
   // ==================== Cross-Origin HTTP Request Wrapper ====================
-  function crossOriginPost(url, headers, bodyObj) {
+  async function crossOriginPost(url, headers, bodyObj) {
     const payload = JSON.stringify(bodyObj);
     const xhrFn =
       typeof GM_xmlhttpRequest === 'function'
         ? GM_xmlhttpRequest
         : typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function'
-          ? GM.xmlHttpRequest
+          ? GM.xmlHttpRequest.bind(GM)
           : null;
 
     if (xhrFn) {
-      return new Promise((resolve, reject) => {
-        xhrFn({
+      const res = await new Promise((resolve, reject) => {
+        const request = xhrFn({
           method: 'POST',
           url,
           headers,
           data: payload,
+          responseType: 'text',
           timeout: 30000,
-          onload: (res) => {
-            if (res.status >= 200 && res.status < 300) {
-              try {
-                resolve(JSON.parse(res.responseText));
-              } catch (e) {
-                reject(new Error('Failed to parse response JSON: ' + res.responseText.slice(0, 120)));
-              }
-            } else {
-              reject(new Error(`HTTP ${res.status}: ${res.responseText.slice(0, 200)}`));
-            }
-          },
-          onerror: (err) => reject(new Error('Network request failed: ' + JSON.stringify(err))),
-          ontimeout: () => reject(new Error('API request timed out (30s)'))
+          onload: resolve,
+          onerror: () => reject(new Error('Network request failed')),
+          ontimeout: () => reject(new Error('API request timed out (30s)')),
+          onabort: () => reject(new Error('API request was canceled'))
         });
+        if (typeof request?.then === 'function') request.then(resolve, reject);
       });
+      return parseResponse(res.status, res.responseText);
     }
 
-    return fetch(url, {
-      method: 'POST',
-      headers,
-      body: payload
-    }).then(async (res) => {
-      const text = await res.text();
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-      return JSON.parse(text);
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: payload,
+        signal: controller.signal
+      });
+      return parseResponse(res.status, await res.text());
+    } catch (err) {
+      if (controller.signal.aborted) throw new Error('API request timed out (30s)');
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function parseResponse(status, body) {
+    if (status < 200 || status >= 300) {
+      throw new Error(`HTTP ${status}: ${(body || '').slice(0, 200)}`);
+    }
+    try {
+      return JSON.parse(body);
+    } catch {
+      throw new Error('API returned invalid JSON');
+    }
   }
 
   // ==================== Prompt Builder & LLM Invocation ====================
   function buildSystemPrompt(cfg) {
-    const toneObj = TONE_PRESETS[cfg.activeTone] || TONE_PRESETS.natural;
+    const toneObj = TONE_PRESETS[cfg.activeTone];
     const toneInstruction =
       cfg.activeTone === 'custom' && cfg.customTonePrompt.trim()
         ? cfg.customTonePrompt.trim()
-        : toneObj.instruction;
+        : toneObj.instruction || TONE_PRESETS.natural.instruction;
 
     return [
       'You are an expert multilingual translator, copyeditor, and tone stylist.',
@@ -179,6 +211,14 @@
       '2. Do NOT include explanations, alternatives, notes, quotation marks wrapping the output, or markdown code blocks.',
       '3. Preserve line breaks, @mentions, #hashtags, URLs, and emojis naturally.'
     ].join('\n');
+  }
+
+  function requireText(result, provider, truncated) {
+    if (truncated) throw new Error(`${provider} response was cut off`);
+    if (typeof result !== 'string' || !result.trim()) {
+      throw new Error(`${provider} did not return valid text`);
+    }
+    return result.trim();
   }
 
   async function callProviderAPI(systemPrompt, userText, cfg) {
@@ -192,7 +232,7 @@
         Authorization: `Bearer ${cfg.cohereApiKey.trim()}`
       };
       const body = {
-        model: cfg.cohereModel.trim() || 'command-a-plus-05-2026',
+        model: cfg.cohereModel.trim() || DEFAULT_CONFIG.cohereModel,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userText }
@@ -209,13 +249,12 @@
         : typeof contentBlocks === 'string'
           ? contentBlocks
           : '';
-      if (!result.trim()) throw new Error('Cohere did not return valid text');
-      return result.trim();
+      return requireText(result, 'Cohere', ['MAX_TOKENS', 'max_tokens'].includes(data?.finish_reason));
     } else if (cfg.provider === 'gemini') {
       if (!cfg.geminiApiKey.trim()) {
         throw new Error('Please click the gear icon to enter your Gemini API Key first');
       }
-      const model = encodeURIComponent(cfg.geminiModel.trim() || 'gemini-3.5-flash-lite');
+      const model = encodeURIComponent((cfg.geminiModel.trim() || DEFAULT_CONFIG.geminiModel).replace(/^models\//, ''));
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const headers = {
         'Content-Type': 'application/json',
@@ -234,49 +273,68 @@
       };
 
       const data = await crossOriginPost(url, headers, body);
-      const result = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!result) throw new Error('Gemini did not return valid text');
-      return result.trim();
+      const candidate = data?.candidates?.[0];
+      const parts = candidate?.content?.parts;
+      const result = Array.isArray(parts)
+        ? parts.filter((part) => !part?.thought && typeof part?.text === 'string').map((part) => part.text).join('')
+        : '';
+      return requireText(result, 'Gemini', candidate?.finishReason === 'MAX_TOKENS');
     } else {
-      if (!cfg.openaiApiKey.trim()) {
-        throw new Error('Please click the gear icon to enter your OpenAI-compatible API Key first');
+      let url;
+      try {
+        url = new URL(cfg.openaiBaseUrl.trim() || DEFAULT_CONFIG.openaiBaseUrl);
+      } catch {
+        throw new Error('Please enter a full HTTP or HTTPS API Base URL');
       }
-      let baseUrl = (cfg.openaiBaseUrl.trim() || 'https://api.openai.com/v1').replace(/\/+$/, '');
-      const url = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl}/chat/completions`;
-      const headers = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.openaiApiKey.trim()}`
-      };
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('Please enter a full HTTP or HTTPS API Base URL');
+      }
+      const apiKey = cfg.openaiApiKey.trim();
+      if (url.hostname === 'api.openai.com' && !apiKey) {
+        throw new Error('Please click the gear icon to enter your OpenAI API Key first');
+      }
+      const path = url.pathname.replace(/\/+$/, '');
+      url.pathname = path.endsWith('/chat/completions') ? path : `${path}/chat/completions`;
+      const headers = { 'Content-Type': 'application/json' };
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
       const body = {
-        model: cfg.openaiModel.trim() || 'gpt-6-luna',
+        model: cfg.openaiModel.trim() || DEFAULT_CONFIG.openaiModel,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userText }
         ]
       };
 
-      const data = await crossOriginPost(url, headers, body);
-      const result = data?.choices?.[0]?.message?.content;
-      if (!result) throw new Error('OpenAI-compatible API did not return valid text');
-      return result.trim();
+      const data = await crossOriginPost(url.href, headers, body);
+      const choice = data?.choices?.[0];
+      return requireText(choice?.message?.content, 'OpenAI-compatible API', choice?.finish_reason === 'length');
     }
-  }
-
-  async function transformText(text, cfg) {
-    return callProviderAPI(buildSystemPrompt(cfg), text, cfg);
   }
 
   // ==================== Input Reading & Framework-Compatible Writing ====================
+  const TEXT_INPUT_TYPES = ['text', 'search', 'email', 'url'];
+
   function isEditableElement(el) {
     if (!el || el.nodeType !== 1) return false;
-    if (el.closest('#ai-tone-rewriter-host')) return false;
-    if (el.tagName === 'TEXTAREA') return !el.disabled && !el.readOnly;
+    if (el.tagName === 'TEXTAREA') return !el.matches(':disabled') && !el.readOnly;
     if (el.tagName === 'INPUT') {
-      const validTypes = ['text', 'search', 'email', 'url', ''];
-      return validTypes.includes((el.type || '').toLowerCase()) && !el.disabled && !el.readOnly;
+      return TEXT_INPUT_TYPES.includes(el.type) && !el.matches(':disabled') && !el.readOnly;
     }
     if (el.isContentEditable) return true;
     return false;
+  }
+
+  function getEditor(el) {
+    if (!isEditableElement(el)) return null;
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return el;
+    while (el.isContentEditable && el.parentElement?.isContentEditable) el = el.parentElement;
+    return el;
+  }
+
+  function getFocusedEditor() {
+    let el = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    return getEditor(el);
   }
 
   function getElementText(el) {
@@ -284,12 +342,16 @@
     if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
       return el.value || '';
     }
-    return el.innerText || el.textContent || '';
+    return el.innerText ?? el.textContent ?? '';
   }
 
-  function setElementText(el, newText) {
-    if (!el) return;
-    el.focus();
+  function setElementText(el, newText, expectedText) {
+    if (getFocusedEditor() !== el) {
+      el.focus();
+      if (getFocusedEditor() !== el) return false;
+    }
+    // Focus handlers can change the draft synchronously.
+    if (getElementText(el) !== expectedText) return false;
 
     if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
       const proto =
@@ -302,67 +364,60 @@
       } else {
         el.value = newText;
       }
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return;
+      return true;
     }
 
-    if (el.isContentEditable) {
-      // Support rich-text frameworks such as Lexical (X/Twitter), Slate (Discord), ProseMirror (ChatGPT)
-      const selection = window.getSelection();
+    // Use the legacy editing command when available to preserve native undo history.
+    const editingCommand = Reflect.get(document, 'execCommand');
+    const selection = window.getSelection();
+    if (selection && typeof editingCommand === 'function') {
       const range = document.createRange();
       range.selectNodeContents(el);
       selection.removeAllRanges();
       selection.addRange(range);
 
-      const inserted = document.execCommand('insertText', false, newText);
-      if (!inserted) {
-        el.textContent = newText;
-        el.dispatchEvent(
-          new InputEvent('input', {
-            bubbles: true,
-            cancelable: true,
-            inputType: 'insertText',
-            data: newText
-          })
-        );
-      }
+      if (editingCommand.call(document, 'insertText', false, newText)) return true;
     }
+
+    el.innerText = newText;
+    el.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      inputType: 'insertText',
+      data: newText
+    }));
+    return true;
   }
 
   // ==================== Shadow DOM Floating Pill & Settings Modal ====================
-  let config = { ...DEFAULT_CONFIG };
+  let config = await loadConfig();
   let activeInput = null;
-  let lastOriginalText = '';
-  let lastModifiedInput = null;
-  let isProcessing = false;
-  let bypassEnterOnce = false;
+  let lastRewrite = null;
+  let processingInput = null;
+  let composingInput = null;
 
   const host = document.createElement('div');
   host.id = 'ai-tone-rewriter-host';
-  host.style.position = 'fixed';
-  host.style.top = '0';
-  host.style.left = '0';
-  host.style.zIndex = '2147483647';
-  host.style.pointerEvents = 'none';
-  document.documentElement.appendChild(host);
-
-  const shadow = host.attachShadow({ mode: 'open' });
+  const shadow = host.attachShadow({ mode: 'closed' });
 
   const SHADOW_CSS = `
     :host {
       all: initial;
-      position: fixed;
-      top: 0;
-      left: 0;
-      z-index: 2147483647;
-      pointer-events: none;
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      z-index: 2147483647 !important;
+      pointer-events: none !important;
     }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
     .pill {
       position: fixed;
       display: none;
       align-items: center;
+      flex-wrap: wrap;
+      max-width: calc(100vw - 16px);
       gap: 4px;
       padding: 4px 6px;
       background: rgba(24, 24, 27, 0.92);
@@ -374,13 +429,11 @@
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
       font-size: 12px;
       pointer-events: auto;
-      transition: opacity 0.15s ease;
       user-select: none;
       touch-action: none;
     }
     .pill.visible { display: flex; }
     .pill.dragging {
-      transition: none;
       cursor: grabbing;
     }
     .drag-handle {
@@ -412,6 +465,11 @@
     }
     .pill select:hover, .pill button:hover {
       background: rgba(255, 255, 255, 0.12);
+    }
+    .pill select { max-width: 100%; }
+    .pill :focus-visible, .modal-actions :focus-visible {
+      outline: 2px solid #93c5fd;
+      outline-offset: 2px;
     }
     .pill select option {
       background: #18181b;
@@ -447,8 +505,10 @@
       box-shadow: 0 10px 25px rgba(0,0,0,0.35);
       pointer-events: auto;
       display: none;
-      max-width: 340px;
+      max-width: min(340px, calc(100vw - 48px));
       line-height: 1.4;
+      overflow-wrap: anywhere;
+      z-index: 1;
     }
     .modal-backdrop {
       position: fixed;
@@ -465,12 +525,15 @@
       color: #f4f4f5;
       width: 420px;
       max-width: 92vw;
+      max-height: 92vh;
+      overflow: auto;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.14);
       padding: 18px 20px;
       box-shadow: 0 20px 40px rgba(0,0,0,0.5);
     }
     .modal h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
+    .modal fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
     .field { margin-bottom: 11px; }
     .field label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
     .field input, .field select, .field textarea {
@@ -508,6 +571,7 @@
     .test-status.info { display: block; color: #a1a1aa; }
     .modal-actions {
       display: flex;
+      flex-wrap: wrap;
       justify-content: flex-end;
       gap: 8px;
       margin-top: 16px;
@@ -542,94 +606,91 @@
       <button id="btn-settings" title="API & Advanced Settings">⚙️</button>
     </div>
 
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="status"></div>
 
     <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal">
-        <h3>AI Translation & Tone Settings</h3>
-        <div class="field">
-          <label>API Provider</label>
-          <select id="cfg-provider">
-            <option value="cohere">Cohere API (Native v2)</option>
-            <option value="gemini">Google Gemini API (Native)</option>
-            <option value="openai">OpenAI-Compatible API (OpenAI / DeepSeek / Ollama)</option>
-          </select>
-        </div>
-
-        <div id="cohere-fields">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <h3 id="settings-title">AI Translation & Tone Settings</h3>
+        <fieldset id="settings-fields">
           <div class="field">
-            <label>Cohere API Key</label>
-            <input type="password" id="cfg-cohere-key" placeholder="Cohere API Key" />
+            <label for="cfg-provider">API Provider</label>
+            <select id="cfg-provider">
+              <option value="cohere">Cohere API (Native v2)</option>
+              <option value="gemini">Google Gemini API (Native)</option>
+              <option value="openai">OpenAI-Compatible API (OpenAI / DeepSeek / Ollama)</option>
+            </select>
           </div>
-          <div class="field">
-            <label>Cohere Model</label>
-            <input type="text" id="cfg-cohere-model" placeholder="command-a-plus-05-2026" />
-          </div>
-        </div>
 
-        <div id="gemini-fields">
-          <div class="field">
-            <label>Gemini API Key</label>
-            <input type="password" id="cfg-gemini-key" placeholder="AIzaSy..." />
+          <div id="cohere-fields">
+            <div class="field">
+              <label for="cfg-cohere-key">Cohere API Key</label>
+              <input type="password" id="cfg-cohere-key" autocomplete="off" placeholder="Cohere API Key" />
+            </div>
+            <div class="field">
+              <label for="cfg-cohere-model">Cohere Model</label>
+              <input type="text" id="cfg-cohere-model" placeholder="${DEFAULT_CONFIG.cohereModel}" />
+            </div>
           </div>
-          <div class="field">
-            <label>Gemini Model</label>
-            <input type="text" id="cfg-gemini-model" placeholder="gemini-3.5-flash-lite" />
+
+          <div id="gemini-fields">
+            <div class="field">
+              <label for="cfg-gemini-key">Gemini API Key</label>
+              <input type="password" id="cfg-gemini-key" autocomplete="off" placeholder="AIzaSy..." />
+            </div>
+            <div class="field">
+              <label for="cfg-gemini-model">Gemini Model</label>
+              <input type="text" id="cfg-gemini-model" placeholder="${DEFAULT_CONFIG.geminiModel}" />
+            </div>
           </div>
-        </div>
 
-        <div id="openai-fields">
-          <div class="field">
-            <label>OpenAI-Compatible Base URL</label>
-            <input type="text" id="cfg-openai-url" placeholder="https://api.openai.com/v1" />
+          <div id="openai-fields">
+            <div class="field">
+              <label for="cfg-openai-url">OpenAI-Compatible Base URL</label>
+              <input type="text" id="cfg-openai-url" placeholder="${DEFAULT_CONFIG.openaiBaseUrl}" />
+            </div>
+            <div class="field">
+              <label for="cfg-openai-key">API Key (if required by your server)</label>
+              <input type="password" id="cfg-openai-key" autocomplete="off" placeholder="sk-..." />
+            </div>
+            <div class="field">
+              <label for="cfg-openai-model">Model Name</label>
+              <input type="text" id="cfg-openai-model" placeholder="${DEFAULT_CONFIG.openaiModel}" />
+            </div>
           </div>
+
           <div class="field">
-            <label>API Key</label>
-            <input type="password" id="cfg-openai-key" placeholder="sk-..." />
+            <label for="cfg-custom-prompt">Custom Persona Prompt (active when "Custom Persona" is selected)</label>
+            <textarea id="cfg-custom-prompt" rows="2" placeholder="e.g., Reply in the voice of a Victorian aristocrat with a touch of refined arrogance."></textarea>
           </div>
-          <div class="field">
-            <label>Model Name</label>
-            <input type="text" id="cfg-openai-model" placeholder="gpt-6-luna / deepseek-chat" />
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="cfg-intercept-enter" />
+            <span>Polish with Enter</span>
+          </label>
+
+          <div class="test-status" id="test-status" role="status"></div>
+
+          <div class="modal-actions">
+            <button class="btn-test" id="btn-test" type="button">Test API</button>
+            <button class="btn-cancel" id="btn-cancel" type="button">Cancel</button>
+            <button class="btn-save" id="btn-save" type="button">Save Settings</button>
           </div>
-        </div>
-
-        <div class="field">
-          <label>Custom Persona Prompt (active when "Custom Persona" is selected)</label>
-          <textarea id="cfg-custom-prompt" rows="2" placeholder="e.g., Reply in the voice of a Victorian aristocrat with a touch of refined arrogance."></textarea>
-        </div>
-
-        <label class="checkbox-row">
-          <input type="checkbox" id="cfg-intercept-enter" />
-          <span>Intercept Enter key: automatically transform and send on Enter</span>
-        </label>
-
-        <div class="test-status" id="test-status"></div>
-
-        <div class="modal-actions">
-          <button class="btn-test" id="btn-test" type="button">Test API</button>
-          <button class="btn-cancel" id="btn-cancel" type="button">Cancel</button>
-          <button class="btn-save" id="btn-save" type="button">Save Settings</button>
-        </div>
+        </fieldset>
       </div>
     </div>
   `;
 
   // Use Constructable Stylesheets so strict CSP style-src sites (e.g. Mastodon) allow Shadow DOM styling
-  if ('adoptedStyleSheets' in shadow && typeof CSSStyleSheet === 'function') {
-    try {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync(SHADOW_CSS);
-      shadow.adoptedStyleSheets = [sheet];
-    } catch {
-      const styleEl = document.createElement('style');
-      styleEl.textContent = SHADOW_CSS;
-      shadow.appendChild(styleEl);
-    }
-  } else {
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(SHADOW_CSS);
+    shadow.adoptedStyleSheets = [sheet];
+  } catch {
     const styleEl = document.createElement('style');
     styleEl.textContent = SHADOW_CSS;
     shadow.appendChild(styleEl);
   }
+  document.documentElement.appendChild(host);
 
   const pill = shadow.getElementById('pill');
   const dragHandle = shadow.getElementById('drag-handle');
@@ -643,7 +704,7 @@
 
   btnUndo.style.display = 'none';
 
-  // Initialize dropdown options
+  // Initialise dropdown options
   TARGET_LANGUAGES.forEach((lang) => {
     const opt = document.createElement('option');
     opt.value = lang;
@@ -657,46 +718,50 @@
     opt.textContent = val.name;
     quickTone.appendChild(opt);
   });
+  quickLang.value = config.targetLang;
+  quickTone.value = config.activeTone;
 
+  let toastTimer;
   function showToast(msg, duration = 3200) {
     toastEl.textContent = msg;
     toastEl.style.display = 'block';
-    clearTimeout(toastEl._timer);
-    toastEl._timer = setTimeout(() => {
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
       toastEl.style.display = 'none';
     }, duration);
   }
 
   let focusCheckTimer = null;
+  let positionFrame = null;
   let isInteractingWithPill = false;
   let customPillPos = null;
 
   function hidePill() {
+    if (composingInput === activeInput) composingInput = null;
     activeInput = null;
     isInteractingWithPill = false;
     pill.classList.remove('visible');
   }
 
-  function isFocusWithinActiveOrUI() {
-    const active = document.activeElement;
-    if (!active) return false;
-    if (active === host || host.contains(active)) return true;
-    if (activeInput && (active === activeInput || activeInput.contains(active))) return true;
-    return isEditableElement(active);
+  function isCurrentEditor(el) {
+    return el && el === activeInput && el.isConnected && isEditableElement(el) &&
+      !modalBackdrop.classList.contains('open') &&
+      (getFocusedEditor() === el || document.activeElement === host);
   }
 
   function scheduleFocusCheck() {
     clearTimeout(focusCheckTimer);
     focusCheckTimer = setTimeout(() => {
       if (modalBackdrop.classList.contains('open') || isInteractingWithPill) return;
-      if (!isFocusWithinActiveOrUI()) {
+      if (!isCurrentEditor(activeInput)) {
         hidePill();
       }
     }, 0);
   }
 
   function updatePillPosition() {
-    if (!activeInput || !document.body.contains(activeInput)) {
+    if (!activeInput) return;
+    if (!activeInput.isConnected || !isEditableElement(activeInput)) {
       hidePill();
       return;
     }
@@ -721,14 +786,20 @@
         const below = rect.bottom + 6;
         top = below + pillRect.height <= window.innerHeight - 8 ? below : 8;
       }
-      left = Math.min(
-        window.innerWidth - pillRect.width - 12,
-        Math.max(8, rect.right - pillRect.width)
-      );
+      top = Math.min(maxTop, top);
+      left = Math.min(maxLeft, Math.max(8, rect.right - pillRect.width));
     }
 
     pill.style.top = `${top}px`;
     pill.style.left = `${left}px`;
+  }
+
+  function schedulePositionUpdate() {
+    if (!activeInput || positionFrame !== null) return;
+    positionFrame = requestAnimationFrame(() => {
+      positionFrame = null;
+      updatePillPosition();
+    });
   }
 
   // Prevent clicking/dragging floating toolbar from blurring the active input
@@ -740,7 +811,7 @@
 
   // Dragging support via drag handle or non-control pill area
   pill.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || !e.isPrimary || pill.classList.contains('dragging')) return;
     if (e.target.closest('button, select, option')) return;
 
     const pillRect = pill.getBoundingClientRect();
@@ -753,6 +824,7 @@
     pill.classList.add('dragging');
 
     const onPointerMove = (moveEvent) => {
+      if (moveEvent.pointerId !== e.pointerId) return;
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
       if (!moved && Math.hypot(dx, dy) < 3) return;
@@ -769,7 +841,8 @@
       pill.style.top = `${nextTop}px`;
     };
 
-    const stopDragging = () => {
+    const stopDragging = (endEvent) => {
+      if (endEvent.pointerId !== e.pointerId) return;
       pill.classList.remove('dragging');
       window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('pointerup', stopDragging, true);
@@ -786,78 +859,83 @@
     updatePillPosition();
   });
 
-  quickLang.addEventListener('change', async () => {
+  function saveQuickSetting(key, value) {
     isInteractingWithPill = false;
-    config.targetLang = quickLang.value;
-    await saveConfig(config);
-    if (activeInput) activeInput.focus();
+    config = { ...config, [key]: value };
+    if (activeInput?.isConnected && isEditableElement(activeInput)) activeInput.focus();
     updatePillPosition();
-  });
+    saveConfig(config).catch(() => showToast('Could not save settings. This change applies to this tab.'));
+  }
 
-  quickTone.addEventListener('change', async () => {
-    isInteractingWithPill = false;
-    config.activeTone = quickTone.value;
-    await saveConfig(config);
-    if (activeInput) activeInput.focus();
-    updatePillPosition();
-  });
+  quickLang.addEventListener('change', () => saveQuickSetting('targetLang', quickLang.value));
+  quickTone.addEventListener('change', () => saveQuickSetting('activeTone', quickTone.value));
 
   // ==================== Main Transformation Flow ====================
-  async function executeRewrite(autoSubmitAfter = false) {
-    if (!activeInput || isProcessing) return;
-    const rawText = getElementText(activeInput).trim();
-    if (!rawText) {
+  function updateUndoButton() {
+    const canUndo = lastRewrite?.input === activeInput && getElementText(activeInput) === lastRewrite.result;
+    btnUndo.style.display = canUndo ? '' : 'none';
+  }
+
+  async function executeRewrite() {
+    const input = activeInput;
+    if (processingInput || !isCurrentEditor(input) || composingInput === input) return;
+    if (document.activeElement === host) {
+      input.focus();
+      if (getFocusedEditor() !== input) return;
+    }
+    const original = getElementText(input);
+    if (!original.trim()) {
       showToast('Input is empty. Please enter some text first.');
       return;
     }
 
-    isProcessing = true;
+    processingInput = input;
     btnRun.disabled = true;
     const prevBtnText = btnRun.textContent;
     btnRun.textContent = '⏳ Processing...';
     updatePillPosition();
 
     try {
-      const targetEl = activeInput;
-      const transformed = await transformText(rawText, config);
-      lastOriginalText = rawText;
-      lastModifiedInput = targetEl;
-      setElementText(targetEl, transformed);
-      btnUndo.style.display = 'inline-block';
-
-      if (autoSubmitAfter) {
-        setTimeout(() => {
-          bypassEnterOnce = true;
-          targetEl.dispatchEvent(
-            new KeyboardEvent('keydown', {
-              key: 'Enter',
-              code: 'Enter',
-              keyCode: 13,
-              which: 13,
-              bubbles: true,
-              cancelable: true
-            })
-          );
-        }, 60);
+      const transformed = await callProviderAPI(buildSystemPrompt(config), original, config);
+      if (!isCurrentEditor(input) || composingInput === input || getElementText(input) !== original) {
+        showToast('The draft changed or lost focus. Polish it again when ready.');
+        return;
       }
+
+      if (original !== transformed && !setElementText(input, transformed, original)) {
+        showToast('The draft changed while the editor regained focus.');
+        return;
+      }
+      const result = getElementText(input);
+      if (original !== transformed && result === original) {
+        showToast('The editor did not accept the rewrite.');
+        return;
+      }
+      const rewrite = { input, original, result };
+      if (result !== original) lastRewrite = rewrite;
+      updateUndoButton();
     } catch (err) {
-      showToast(`Transformation failed: ${err.message}`, 4500);
+      showToast(`Transformation failed: ${err?.message || String(err)}`, 4500);
     } finally {
-      isProcessing = false;
+      processingInput = null;
       btnRun.disabled = false;
       btnRun.textContent = prevBtnText;
       updatePillPosition();
     }
   }
 
-  btnRun.addEventListener('click', () => executeRewrite(false));
+  btnRun.addEventListener('click', executeRewrite);
 
   btnUndo.addEventListener('click', () => {
-    if (lastModifiedInput && lastOriginalText) {
-      setElementText(lastModifiedInput, lastOriginalText);
-      btnUndo.style.display = 'none';
+    if (lastRewrite?.input === activeInput && isCurrentEditor(activeInput) &&
+      composingInput !== activeInput && getElementText(activeInput) === lastRewrite.result) {
+      const { input, original } = lastRewrite;
+      if (setElementText(input, original, lastRewrite.result)) {
+        lastRewrite = null;
+        showToast('Original text restored', 1800);
+      }
+      updateUndoButton();
       updatePillPosition();
-      showToast('Original text restored', 1800);
     }
   });
 
@@ -868,6 +946,14 @@
   const cohereFields = shadow.getElementById('cohere-fields');
   const testStatusEl = shadow.getElementById('test-status');
   const btnTest = shadow.getElementById('btn-test');
+  const settingsFields = shadow.getElementById('settings-fields');
+  const keyFields = ['cfg-cohere-key', 'cfg-gemini-key', 'cfg-openai-key'];
+  let testRevision = 0;
+
+  function invalidateTestStatus() {
+    testRevision += 1;
+    setTestStatus('', '');
+  }
 
   function setTestStatus(type, msg) {
     testStatusEl.className = type ? `test-status ${type}` : 'test-status';
@@ -881,11 +967,8 @@
     openaiFields.style.display = provider === 'openai' ? 'block' : 'none';
   }
 
-  cfgProvider.addEventListener('change', () => {
-    toggleProviderFields();
-    setTestStatus('', '');
-  });
-  toggleProviderFields();
+  cfgProvider.addEventListener('change', toggleProviderFields);
+  settingsFields.addEventListener('input', invalidateTestStatus);
 
   btnSettings.addEventListener('click', () => {
     cfgProvider.value = config.provider;
@@ -898,9 +981,10 @@
     shadow.getElementById('cfg-openai-model').value = config.openaiModel;
     shadow.getElementById('cfg-custom-prompt').value = config.customTonePrompt;
     shadow.getElementById('cfg-intercept-enter').checked = config.interceptEnter;
-    setTestStatus('', '');
+    invalidateTestStatus();
     toggleProviderFields();
     modalBackdrop.classList.add('open');
+    cfgProvider.focus();
   });
 
   function readModalConfig() {
@@ -908,20 +992,23 @@
       ...config,
       provider: cfgProvider.value,
       cohereApiKey: shadow.getElementById('cfg-cohere-key').value.trim(),
-      cohereModel: shadow.getElementById('cfg-cohere-model').value.trim() || 'command-a-plus-05-2026',
+      cohereModel: shadow.getElementById('cfg-cohere-model').value.trim() || DEFAULT_CONFIG.cohereModel,
       geminiApiKey: shadow.getElementById('cfg-gemini-key').value.trim(),
-      geminiModel: shadow.getElementById('cfg-gemini-model').value.trim() || 'gemini-3.5-flash-lite',
-      openaiBaseUrl: shadow.getElementById('cfg-openai-url').value.trim() || 'https://api.openai.com/v1',
+      geminiModel: shadow.getElementById('cfg-gemini-model').value.trim() || DEFAULT_CONFIG.geminiModel,
+      openaiBaseUrl: shadow.getElementById('cfg-openai-url').value.trim() || DEFAULT_CONFIG.openaiBaseUrl,
       openaiApiKey: shadow.getElementById('cfg-openai-key').value.trim(),
-      openaiModel: shadow.getElementById('cfg-openai-model').value.trim() || 'gpt-6-luna',
+      openaiModel: shadow.getElementById('cfg-openai-model').value.trim() || DEFAULT_CONFIG.openaiModel,
       customTonePrompt: shadow.getElementById('cfg-custom-prompt').value,
       interceptEnter: shadow.getElementById('cfg-intercept-enter').checked
     };
   }
 
   function closeSettingsModal() {
+    if (settingsFields.disabled) return;
     modalBackdrop.classList.remove('open');
-    if (activeInput && document.body.contains(activeInput)) {
+    for (const id of keyFields) shadow.getElementById(id).value = '';
+    invalidateTestStatus();
+    if (activeInput?.isConnected && isEditableElement(activeInput)) {
       activeInput.focus();
       updatePillPosition();
     } else {
@@ -931,6 +1018,7 @@
 
   btnTest.addEventListener('click', async () => {
     const draftCfg = readModalConfig();
+    const revision = testRevision;
     btnTest.disabled = true;
     const prevText = btnTest.textContent;
     btnTest.textContent = 'Testing...';
@@ -942,10 +1030,12 @@
         'Connection test.',
         draftCfg
       );
-      const elapsed = Date.now() - startedAt;
-      setTestStatus('success', `✓ API works (${elapsed}ms): ${reply.slice(0, 80)}`);
+      if (revision === testRevision) {
+        const elapsed = Date.now() - startedAt;
+        setTestStatus('success', `✓ API works (${elapsed}ms): ${reply.slice(0, 80)}`);
+      }
     } catch (err) {
-      setTestStatus('error', `✕ Test failed: ${err.message}`);
+      if (revision === testRevision) setTestStatus('error', `✕ Test failed: ${err?.message || String(err)}`);
     } finally {
       btnTest.disabled = false;
       btnTest.textContent = prevText;
@@ -955,44 +1045,78 @@
   shadow.getElementById('btn-cancel').addEventListener('click', closeSettingsModal);
 
   shadow.getElementById('btn-save').addEventListener('click', async () => {
-    config = readModalConfig();
-    await saveConfig(config);
+    const draft = readModalConfig();
+    invalidateTestStatus();
+    settingsFields.disabled = true;
+    try {
+      await saveConfig(draft);
+      config = draft;
+    } catch {
+      setTestStatus('error', 'Could not save settings. Try again.');
+      return;
+    } finally {
+      settingsFields.disabled = false;
+    }
     closeSettingsModal();
-    showToast('Settings saved globally ✓');
+    showToast(canPersistConfig ? 'Settings saved globally ✓' : 'Settings applied for this tab only');
+  });
+
+  /** @param {KeyboardEvent} event */
+  function isComposingKey(event) {
+    // Some IME keys report 229 even when isComposing is false.
+    return event.isComposing || Reflect.get(event, 'keyCode') === 229;
+  }
+
+  modalBackdrop.addEventListener('keydown', (e) => {
+    if (isComposingKey(e)) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSettingsModal();
+    } else if (e.key === 'Tab') {
+      const controls = Array.from(settingsFields.querySelectorAll('button, input, select, textarea'))
+        .filter((control) => !control.matches(':disabled') && control.getClientRects().length);
+      const index = controls.indexOf(shadow.activeElement);
+      if (index === -1 || (e.shiftKey ? index === 0 : index === controls.length - 1)) {
+        e.preventDefault();
+        const next = e.shiftKey ? controls[controls.length - 1] : controls[0];
+        next?.focus();
+      }
+    }
   });
 
   // ==================== Global Event Listeners ====================
+  pill.addEventListener('pointerdown', (e) => {
+    isInteractingWithPill = e.target === quickLang || e.target === quickTone;
+  }, true);
+
   document.addEventListener(
     'pointerdown',
     (e) => {
-      const path = e.composedPath ? e.composedPath() : [];
-      if (path.includes(host) || e.target === host) {
-        isInteractingWithPill = path.includes(quickLang) || path.includes(quickTone);
-        return;
-      }
+      const path = e.composedPath();
+      if (path.includes(host)) return;
       isInteractingWithPill = false;
-      if (activeInput && !path.includes(activeInput) && !activeInput.contains(e.target)) {
-        scheduleFocusCheck();
-      }
+      if (activeInput && !path.includes(activeInput)) scheduleFocusCheck();
     },
     true
   );
+
+  function activateEditor(editor) {
+    if (editor !== activeInput) composingInput = null;
+    activeInput = editor;
+    updateUndoButton();
+    updatePillPosition();
+  }
 
   document.addEventListener(
     'focusin',
     (e) => {
       clearTimeout(focusCheckTimer);
       isInteractingWithPill = false;
-      const target = e.target;
-      if (isEditableElement(target)) {
-        activeInput = target;
-        if (lastModifiedInput !== target) {
-          btnUndo.style.display = 'none';
-        }
-        updatePillPosition();
-      } else if (!e.composedPath?.().includes(host) && !modalBackdrop.classList.contains('open')) {
-        hidePill();
-      }
+      if (e.target === host || modalBackdrop.classList.contains('open')) return;
+      const editor = getEditor(e.composedPath()[0]);
+      if (editor) activateEditor(editor);
+      else hidePill();
     },
     true
   );
@@ -1005,21 +1129,40 @@
     true
   );
 
-  window.addEventListener('scroll', updatePillPosition, true);
-  window.addEventListener('resize', updatePillPosition);
+  document.addEventListener('input', (e) => {
+    if (lastRewrite && getEditor(e.composedPath()[0]) === lastRewrite.input &&
+      getElementText(lastRewrite.input) !== lastRewrite.result) {
+      lastRewrite = null;
+      updateUndoButton();
+      schedulePositionUpdate();
+    }
+  }, true);
+
+  document.addEventListener('compositionstart', (e) => {
+    composingInput = getEditor(e.composedPath()[0]);
+  }, true);
+  document.addEventListener('compositionend', () => {
+    composingInput = null;
+  }, true);
+
+  window.addEventListener('scroll', schedulePositionUpdate, true);
+  window.addEventListener('resize', schedulePositionUpdate);
 
   document.addEventListener(
     'keydown',
     (e) => {
+      if (!e.isTrusted || e.defaultPrevented || isComposingKey(e) ||
+        !isCurrentEditor(activeInput) || composingInput === activeInput) return;
+
       // Shortcut Option + J (Mac) / Alt + J (Win/Linux) to transform in place
-      if (e.altKey && e.code === 'KeyJ' && activeInput) {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyJ') {
         e.preventDefault();
         e.stopPropagation();
-        executeRewrite(false);
+        if (!e.repeat) executeRewrite();
         return;
       }
 
-      // Optional: intercept Enter key to auto-transform before sending
+      // Optionally use Enter to polish the draft in place.
       if (
         config.interceptEnter &&
         e.key === 'Enter' &&
@@ -1027,29 +1170,22 @@
         !e.ctrlKey &&
         !e.altKey &&
         !e.metaKey &&
-        !e.isComposing &&
-        activeInput &&
-        isEditableElement(e.target)
+        getEditor(e.composedPath()[0]) === activeInput &&
+        getElementText(activeInput).trim()
       ) {
-        if (bypassEnterOnce) {
-          bypassEnterOnce = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.repeat) return;
+        if (processingInput && processingInput !== activeInput) {
+          showToast('Wait for the current rewrite to finish.');
           return;
         }
-        const text = getElementText(activeInput).trim();
-        if (text) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          executeRewrite(true);
-        }
+        executeRewrite();
       }
     },
     true
   );
 
-  // Load initial config
-  loadConfig().then((loaded) => {
-    config = loaded;
-    quickLang.value = config.targetLang;
-    quickTone.value = config.activeTone;
-  });
+  const initialEditor = getFocusedEditor();
+  if (initialEditor) activateEditor(initialEditor);
 })();

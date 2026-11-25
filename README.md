@@ -10,7 +10,7 @@
   - **OpenAI-Compatible** (OpenAI, DeepSeek, Ollama, etc., default: `gpt-6-luna`)
 - **Tone Presets & Custom Persona**: Choose from *Native & Natural*, *Pedantic & Scholarly*, *Aloof & Minimalist*, *Street Slang*, *Dry & Sarcastic*, *Crisp Professional*, or define your own *Custom Persona* prompt.
 - **Target Languages**: `English`, `日本語`, `简体中文`, `繁體中文`, `Español`, `Français`, `Deutsch`, `한국어`.
-- **Keyboard Workflow**: Press `Option+J` (macOS) or `Alt+J` (Windows/Linux) to rewrite in place, click **↩** to undo back to the original text, or enable **Intercept Enter key** in settings to automatically polish and send on `Enter`.
+- **Keyboard Workflow**: Press `Option+J` (macOS) or `Alt+J` (Windows/Linux) to rewrite in place. Enable **Polish with Enter** if you also want `Enter` to send the draft to your AI provider for polishing. With the option off, `Enter` works as usual on the site.
 
 ## Installation
 
@@ -30,7 +30,11 @@
 
 ## Usage
 
-1. Click into any editable text box on a webpage — a compact floating toolbar appears near the input.
-2. Click **⚙️** to open **AI Translation & Tone Settings**, select your **API Provider**, enter your **API Key** (and optionally customize the model or custom persona prompt), and click **Save Settings**. Settings are saved globally across sites.
+1. Click into a supported text field or rich-text editor. A floating toolbar appears near the editor.
+2. Click **⚙️** to open **AI Translation & Tone Settings**. Choose a provider, enter an API key if your provider requires one, and click **Save Settings**. When your userscript manager provides private storage, settings are saved across sites. Otherwise they last until you reload or close the page.
 3. Pick your target language and tone from the floating toolbar, type your text, and click **✨ Polish** (or press `Option+J` / `Alt+J`).
-4. Click **↩** anytime before switching inputs to restore your original text.
+4. Review the polished text and use the site's Send or Submit control when ready. Click **↩** in the rewritten field to restore the original text before making any further edits.
+
+For an OpenAI-compatible server, enter the full HTTP or HTTPS base URL and select a model served at that endpoint. Leave the API key blank if the server accepts unauthenticated requests.
+
+Polishing sends the current field's text to the configured provider. Open settings on a page you trust when entering an API key. If you used an earlier version without private userscript storage, the site may still have a copy of the settings in its local storage under `ai_rewriter_cfg`.
