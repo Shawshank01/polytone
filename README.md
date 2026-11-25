@@ -36,5 +36,3 @@
 4. Review the polished text and use the site's Send or Submit control when ready. Click Polytone's **Undo & Restore Original** button to restore the original text before making any further edits. The browser's native undo history may omit rich-text rewrites.
 
 For an OpenAI-compatible server, enter the full HTTP or HTTPS base URL and select a model served at that endpoint. Leave the API key blank if the server accepts unauthenticated requests.
-
-Polishing sends the current field's text to the configured provider. Open settings on a page you trust when entering an API key. If you used an earlier version without private userscript storage, the site may still have a copy of the settings in its local storage under `ai_rewriter_cfg`.
