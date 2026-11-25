@@ -23,7 +23,7 @@
 
 ### Userscripts (Safari on macOS / iOS)
 
-1. Install the [**Userscripts**](https://github.com/quoid/userscripts) app/extension for Safari and enable it in **Safari → Settings → Extensions** (granting access to websites).
+1. Install the [**Userscripts**](https://apps.apple.com/us/app/userscripts/id1463298887) app/extension for Safari and enable it in **Safari → Settings → Extensions** (granting access to websites).
 2. Either:
    - Open [https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js](https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js) in Safari and click the Userscripts extension toolbar icon to install it, **or**
    - Save [`polytone.user.js`](./polytone.user.js) directly into the folder configured in the Userscripts extension settings.
