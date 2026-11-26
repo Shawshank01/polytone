@@ -28,7 +28,7 @@
 ## Usage
 
 1. Click into a supported text field or rich-text editor. A floating toolbar appears near the editor.
-2. Click **⚙️** to open **AI Translation & Tone Settings**. Choose a provider, enter an API key if your provider requires one, and click **Save Settings**. When your userscript manager provides private storage, settings are saved across sites. Otherwise they last until you reload or close the page.
+2. Click **⚙️** to open **AI Translation & Tone Settings**. Choose a provider. Use **Enter API key** or **Change API key** if you need to add or update a key, then click **Save Settings**. When your userscript manager provides private storage, settings are saved across sites. Otherwise they last until you reload or close the page.
 3. Pick your target language and tone from the floating toolbar, type your text, and click **✨ Polish** (or press `Option+J` / `Alt+J`).
 4. Review the polished text and use the site's Send or Submit control when ready. Click Polytone's **Undo & Restore Original** button to restore the original text before making any further edits. The browser's native undo history may omit rich-text rewrites.
 

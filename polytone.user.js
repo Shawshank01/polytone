@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.1.4
+// @version      0.1.5
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
@@ -562,7 +562,7 @@
     .modal fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
     .field { margin-bottom: 11px; }
     .field label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
-    .field input, .field select, .field textarea {
+    .field input, .field select, .field textarea, .btn-key {
       width: 100%;
       background: #27272a;
       color: #f4f4f5;
@@ -575,6 +575,8 @@
     .field input:focus, .field select:focus, .field textarea:focus {
       border-color: #3b82f6;
     }
+    .btn-key { text-align: left; cursor: pointer; }
+    .btn-key:hover, .btn-key:focus-visible { border-color: #3b82f6; }
     .checkbox-row {
       display: flex;
       align-items: center;
@@ -650,7 +652,7 @@
           <div id="cohere-fields">
             <div class="field">
               <label for="cfg-cohere-key">Cohere API Key</label>
-              <input type="password" id="cfg-cohere-key" autocomplete="off" placeholder="Cohere API Key" />
+              <button class="btn-key" type="button" id="cfg-cohere-key" data-config-key="cohereApiKey">Enter API key</button>
             </div>
             <div class="field">
               <label for="cfg-cohere-model">Cohere Model</label>
@@ -661,7 +663,7 @@
           <div id="gemini-fields">
             <div class="field">
               <label for="cfg-gemini-key">Gemini API Key</label>
-              <input type="password" id="cfg-gemini-key" autocomplete="off" placeholder="AIzaSy..." />
+              <button class="btn-key" type="button" id="cfg-gemini-key" data-config-key="geminiApiKey">Enter API key</button>
             </div>
             <div class="field">
               <label for="cfg-gemini-model">Gemini Model</label>
@@ -676,7 +678,7 @@
             </div>
             <div class="field">
               <label for="cfg-openai-key">API Key (if required by your server)</label>
-              <input type="password" id="cfg-openai-key" autocomplete="off" placeholder="sk-..." />
+              <button class="btn-key" type="button" id="cfg-openai-key" data-config-key="openaiApiKey">Enter API key</button>
             </div>
             <div class="field">
               <label for="cfg-openai-model">Model Name</label>
@@ -980,7 +982,7 @@
   const testStatusEl = shadow.getElementById('test-status');
   const btnTest = shadow.getElementById('btn-test');
   const settingsFields = shadow.getElementById('settings-fields');
-  const keyFields = ['cfg-cohere-key', 'cfg-gemini-key', 'cfg-openai-key'];
+  const keyButtons = settingsFields.querySelectorAll('.btn-key');
   let testRevision = 0;
 
   function invalidateTestStatus() {
@@ -1003,14 +1005,27 @@
   cfgProvider.addEventListener('change', toggleProviderFields);
   settingsFields.addEventListener('input', invalidateTestStatus);
 
+  for (const button of keyButtons) {
+    button.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.id = button.id;
+      input.type = 'password';
+      input.autocomplete = 'off';
+      input.value = config[button.dataset.configKey];
+      button.replaceWith(input);
+      input.focus();
+      input.select();
+    });
+  }
+
   btnSettings.addEventListener('click', () => {
     cfgProvider.value = config.provider;
-    shadow.getElementById('cfg-cohere-key').value = config.cohereApiKey;
+    for (const button of keyButtons) {
+      button.textContent = config[button.dataset.configKey] ? 'Change API key' : 'Enter API key';
+    }
     shadow.getElementById('cfg-cohere-model').value = config.cohereModel;
-    shadow.getElementById('cfg-gemini-key').value = config.geminiApiKey;
     shadow.getElementById('cfg-gemini-model').value = config.geminiModel;
     shadow.getElementById('cfg-openai-url').value = config.openaiBaseUrl;
-    shadow.getElementById('cfg-openai-key').value = config.openaiApiKey;
     shadow.getElementById('cfg-openai-model').value = config.openaiModel;
     shadow.getElementById('cfg-custom-prompt').value = config.customTonePrompt;
     shadow.getElementById('cfg-intercept-enter').checked = config.interceptEnter;
@@ -1021,15 +1036,18 @@
   });
 
   function readModalConfig() {
+    const editedKeys = {};
+    for (const button of keyButtons) {
+      const field = shadow.getElementById(button.id);
+      if (field !== button) editedKeys[button.dataset.configKey] = field.value.trim();
+    }
     return {
       ...config,
+      ...editedKeys,
       provider: cfgProvider.value,
-      cohereApiKey: shadow.getElementById('cfg-cohere-key').value.trim(),
       cohereModel: shadow.getElementById('cfg-cohere-model').value.trim() || DEFAULT_CONFIG.cohereModel,
-      geminiApiKey: shadow.getElementById('cfg-gemini-key').value.trim(),
       geminiModel: shadow.getElementById('cfg-gemini-model').value.trim() || DEFAULT_CONFIG.geminiModel,
       openaiBaseUrl: shadow.getElementById('cfg-openai-url').value.trim() || DEFAULT_CONFIG.openaiBaseUrl,
-      openaiApiKey: shadow.getElementById('cfg-openai-key').value.trim(),
       openaiModel: shadow.getElementById('cfg-openai-model').value.trim() || DEFAULT_CONFIG.openaiModel,
       customTonePrompt: shadow.getElementById('cfg-custom-prompt').value,
       interceptEnter: shadow.getElementById('cfg-intercept-enter').checked
@@ -1039,7 +1057,13 @@
   function closeSettingsModal() {
     if (settingsFields.disabled) return;
     modalBackdrop.classList.remove('open');
-    for (const id of keyFields) shadow.getElementById(id).value = '';
+    for (const button of keyButtons) {
+      const field = shadow.getElementById(button.id);
+      if (field !== button) {
+        field.value = '';
+        field.replaceWith(button);
+      }
+    }
     invalidateTestStatus();
     if (activeInput?.isConnected && isEditableElement(activeInput)) {
       activeInput.focus();
