@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.1.5
+// @version      0.1.6
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
@@ -479,7 +479,7 @@
     .pill.dragging .drag-handle {
       cursor: grabbing;
     }
-    .pill select, .pill button {
+    .pill button {
       background: transparent;
       color: #f4f4f5;
       border: none;
@@ -489,18 +489,47 @@
       border-radius: 999px;
       padding: 3px 6px;
     }
-    .pill select:hover, .pill button:hover {
+    .pill button:hover {
       background: rgba(255, 255, 255, 0.12);
     }
-    .pill select { max-width: 100%; }
     .pill :focus-visible, .modal-actions :focus-visible {
       outline: 2px solid #93c5fd;
       outline-offset: 2px;
     }
-    .pill select option {
-      background: #18181b;
-      color: #f4f4f5;
+    .quick-picker { position: relative; min-width: 0; }
+    .quick-trigger { display: flex; align-items: center; gap: 8px; }
+    .quick-trigger::after {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border: solid currentColor;
+      border-width: 0 1px 1px 0;
+      transform: rotate(45deg) translateY(-2px);
     }
+    .quick-options {
+      position: absolute;
+      z-index: 1;
+      min-width: 100%;
+      width: max-content;
+      max-width: calc(100vw - 16px);
+      overflow: auto;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+      background: #18181b;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      padding: 4px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+    }
+    .pill .quick-options button {
+      display: block;
+      width: 100%;
+      padding: 5px 8px;
+      border-radius: 5px;
+      text-align: left;
+    }
+    .pill .quick-options button[aria-checked="true"] { font-weight: 700; }
+    .pill .quick-options button:focus-visible { outline-offset: -2px; }
     .btn-run {
       background: #3b82f6 !important;
       color: #fff !important;
@@ -626,9 +655,15 @@
   shadow.innerHTML = `
     <div class="pill" id="pill">
       <span class="drag-handle" id="drag-handle" title="Drag to move (double-click to reset)">⠿</span>
-      <select id="quick-lang" title="Target Language"></select>
+      <div class="quick-picker">
+        <button class="quick-trigger" id="quick-lang" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="quick-lang-menu"></button>
+        <div class="quick-options" id="quick-lang-menu" role="menu" aria-label="Target language" hidden></div>
+      </div>
       <div class="divider"></div>
-      <select id="quick-tone" title="Preset Tone"></select>
+      <div class="quick-picker">
+        <button class="quick-trigger" id="quick-tone" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="quick-tone-menu"></button>
+        <div class="quick-options" id="quick-tone-menu" role="menu" aria-label="Preset tone" hidden></div>
+      </div>
       <button class="btn-run" id="btn-run" title="Transform & Polish (Option+J / Alt+J)">✨ Polish</button>
       <button id="btn-undo" title="Undo & Restore Original" aria-label="Undo & Restore Original"><span class="undo-icon" aria-hidden="true">↩︎</span></button>
       <button id="btn-settings" title="API & Advanced Settings">⚙️</button>
@@ -722,8 +757,6 @@
 
   const pill = shadow.getElementById('pill');
   const dragHandle = shadow.getElementById('drag-handle');
-  const quickLang = shadow.getElementById('quick-lang');
-  const quickTone = shadow.getElementById('quick-tone');
   const btnRun = shadow.getElementById('btn-run');
   const btnUndo = shadow.getElementById('btn-undo');
   const btnSettings = shadow.getElementById('btn-settings');
@@ -731,23 +764,6 @@
   const modalBackdrop = shadow.getElementById('modal-backdrop');
 
   btnUndo.style.display = 'none';
-
-  // Initialise dropdown options
-  TARGET_LANGUAGES.forEach((lang) => {
-    const opt = document.createElement('option');
-    opt.value = lang;
-    opt.textContent = lang;
-    quickLang.appendChild(opt);
-  });
-
-  Object.entries(TONE_PRESETS).forEach(([key, val]) => {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = val.name;
-    quickTone.appendChild(opt);
-  });
-  quickLang.value = config.targetLang;
-  quickTone.value = config.activeTone;
 
   let toastTimer;
   function showToast(msg, duration = 3200) {
@@ -761,13 +777,36 @@
 
   let focusCheckTimer = null;
   let positionFrame = null;
-  let isInteractingWithPill = false;
   let customPillPos = null;
+  let openQuickMenu = null;
+
+  function closeQuickMenu(restoreFocus = false) {
+    if (!openQuickMenu) return;
+    const { trigger, menu } = openQuickMenu;
+    openQuickMenu = null;
+    trigger.setAttribute('aria-expanded', 'false');
+    menu.hidden = true;
+    if (restoreFocus) trigger.focus();
+  }
+
+  function positionQuickMenu() {
+    if (!openQuickMenu) return;
+    const { trigger, menu } = openQuickMenu;
+    const rect = trigger.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - 14;
+    const above = rect.top - 14;
+    const placeBelow = menu.scrollHeight <= below || below >= above;
+    menu.style.top = placeBelow ? 'calc(100% + 6px)' : 'auto';
+    menu.style.bottom = placeBelow ? 'auto' : 'calc(100% + 6px)';
+    menu.style.maxHeight = `${Math.max(24, placeBelow ? below : above)}px`;
+    const left = Math.min(rect.left, Math.max(8, window.innerWidth - menu.offsetWidth - 8));
+    menu.style.left = `${left - rect.left}px`;
+  }
 
   function hidePill() {
     if (composingInput === activeInput) composingInput = null;
     activeInput = null;
-    isInteractingWithPill = false;
+    closeQuickMenu();
     pill.classList.remove('visible');
   }
 
@@ -780,7 +819,7 @@
   function scheduleFocusCheck() {
     clearTimeout(focusCheckTimer);
     focusCheckTimer = setTimeout(() => {
-      if (modalBackdrop.classList.contains('open') || isInteractingWithPill) return;
+      if (modalBackdrop.classList.contains('open')) return;
       if (!isCurrentEditor(activeInput)) {
         hidePill();
       }
@@ -795,6 +834,7 @@
     }
     const rect = activeInput.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) {
+      closeQuickMenu();
       pill.classList.remove('visible');
       return;
     }
@@ -820,6 +860,7 @@
 
     pill.style.top = `${top}px`;
     pill.style.left = `${left}px`;
+    positionQuickMenu();
   }
 
   function schedulePositionUpdate() {
@@ -830,17 +871,17 @@
     });
   }
 
-  // Prevent clicking/dragging floating toolbar from blurring the active input
-  pill.addEventListener('mousedown', (e) => {
-    if (e.target !== quickLang && e.target !== quickTone) {
-      e.preventDefault();
-    }
-  });
+  // Keep pointer interactions in the toolbar from blurring the editor.
+  pill.addEventListener('mousedown', (e) => e.preventDefault());
+  pill.addEventListener('click', (e) => {
+    if (!e.target.closest('.quick-picker')) closeQuickMenu();
+  }, true);
 
   // Dragging support via drag handle or non-control pill area
   pill.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || !e.isPrimary || pill.classList.contains('dragging')) return;
-    if (e.target.closest('button, select, option')) return;
+    if (e.target.closest('button, .quick-options')) return;
+    closeQuickMenu();
 
     const pillRect = pill.getBoundingClientRect();
     const startX = e.clientX;
@@ -888,15 +929,85 @@
   });
 
   function saveQuickSetting(key, value) {
-    isInteractingWithPill = false;
     config = { ...config, [key]: value };
     if (activeInput?.isConnected && isEditableElement(activeInput)) activeInput.focus();
     updatePillPosition();
     saveConfig(config).catch(() => showToast('Could not save settings. This change applies to this tab.'));
   }
 
-  quickLang.addEventListener('change', () => saveQuickSetting('targetLang', quickLang.value));
-  quickTone.addEventListener('change', () => saveQuickSetting('activeTone', quickTone.value));
+  function initialiseQuickMenu(id, key, label, entries) {
+    const trigger = shadow.getElementById(id);
+    const menu = shadow.getElementById(`${id}-menu`);
+    const picker = { trigger, menu };
+
+    function updateSelection(value, text) {
+      trigger.textContent = text;
+      trigger.setAttribute('aria-label', `${label}: ${text}`);
+      for (const choice of menu.children) {
+        choice.setAttribute('aria-checked', String(choice.value === value));
+      }
+    }
+
+    for (const [value, text] of entries) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.value = value;
+      choice.textContent = text;
+      choice.tabIndex = -1;
+      choice.setAttribute('role', 'menuitemradio');
+      choice.addEventListener('click', () => {
+        updateSelection(value, text);
+        closeQuickMenu();
+        saveQuickSetting(key, value);
+      });
+      menu.appendChild(choice);
+    }
+    updateSelection(config[key], entries.find(([value]) => value === config[key])[1]);
+
+    function openMenu() {
+      if (openQuickMenu === picker) return;
+      closeQuickMenu();
+      openQuickMenu = picker;
+      trigger.setAttribute('aria-expanded', 'true');
+      menu.hidden = false;
+      positionQuickMenu();
+    }
+
+    trigger.addEventListener('click', (e) => {
+      if (openQuickMenu === picker) {
+        closeQuickMenu();
+        return;
+      }
+      openMenu();
+      if (e.detail === 0 && shadow.activeElement === trigger) {
+        menu.querySelector('[aria-checked="true"]').focus();
+      }
+    });
+
+    trigger.addEventListener('keydown', (e) => {
+      if (e.isComposing || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openMenu();
+      (e.key === 'ArrowDown' ? menu.firstElementChild : menu.lastElementChild).focus();
+    });
+
+    menu.addEventListener('keydown', (e) => {
+      if (e.isComposing) return;
+      let next;
+      if (e.key === 'ArrowDown') next = e.target.nextElementSibling || menu.firstElementChild;
+      if (e.key === 'ArrowUp') next = e.target.previousElementSibling || menu.lastElementChild;
+      if (e.key === 'Home') next = menu.firstElementChild;
+      if (e.key === 'End') next = menu.lastElementChild;
+      if (!next) return;
+      e.preventDefault();
+      e.stopPropagation();
+      next.focus();
+    });
+  }
+
+  initialiseQuickMenu('quick-lang', 'targetLang', 'Target language', TARGET_LANGUAGES.map((lang) => [lang, lang]));
+  initialiseQuickMenu('quick-tone', 'activeTone', 'Preset tone', Object.entries(TONE_PRESETS).map(([key, tone]) => [key, tone.name]));
 
   // ==================== Main Transformation Flow ====================
   function updateUndoButton() {
@@ -1137,16 +1248,12 @@
   });
 
   // ==================== Global Event Listeners ====================
-  pill.addEventListener('pointerdown', (e) => {
-    isInteractingWithPill = e.target === quickLang || e.target === quickTone;
-  }, true);
-
   document.addEventListener(
     'pointerdown',
     (e) => {
       const path = e.composedPath();
       if (path.includes(host)) return;
-      isInteractingWithPill = false;
+      closeQuickMenu();
       if (activeInput && !path.includes(activeInput)) scheduleFocusCheck();
     },
     true
@@ -1163,8 +1270,8 @@
     'focusin',
     (e) => {
       clearTimeout(focusCheckTimer);
-      isInteractingWithPill = false;
       if (e.target === host || modalBackdrop.classList.contains('open')) return;
+      closeQuickMenu();
       const editor = getEditor(e.composedPath()[0]);
       if (editor) activateEditor(editor);
       else hidePill();
@@ -1202,8 +1309,16 @@
   document.addEventListener(
     'keydown',
     (e) => {
-      if (!e.isTrusted || e.defaultPrevented || e.isComposing ||
-        !isCurrentEditor(activeInput) || composingInput === activeInput) return;
+      if (!e.isTrusted || e.defaultPrevented || e.isComposing) return;
+      if (openQuickMenu && (e.key === 'Escape' || e.key === 'Tab')) {
+        closeQuickMenu(openQuickMenu.menu.contains(shadow.activeElement));
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+      if (!isCurrentEditor(activeInput) || composingInput === activeInput) return;
 
       // Shortcut Option + J (Mac) / Alt + J (Win/Linux) to transform in place
       if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyJ') {
