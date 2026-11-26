@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/Shawshank01/polytone/issues
 // @updateURL    https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
 // @downloadURL  https://raw.githubusercontent.com/Shawshank01/polytone/main/polytone.user.js
-// @version      0.1.6
+// @version      0.1.7
 // @description  A lightweight script for browsers that translates, fixes grammar, and rewrites text in any web input box with customisable tones with AI APIs.
 // @match        *://*/*
 // @grant        GM.xmlHttpRequest
@@ -652,98 +652,92 @@
     .btn-save { background: #3b82f6; color: #fff; font-weight: 600; }
   `;
 
-  shadow.innerHTML = `
-    <div class="pill" id="pill">
-      <span class="drag-handle" id="drag-handle" title="Drag to move (double-click to reset)">⠿</span>
-      <div class="quick-picker">
-        <button class="quick-trigger" id="quick-lang" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="quick-lang-menu"></button>
-        <div class="quick-options" id="quick-lang-menu" role="menu" aria-label="Target language" hidden></div>
-      </div>
-      <div class="divider"></div>
-      <div class="quick-picker">
-        <button class="quick-trigger" id="quick-tone" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="quick-tone-menu"></button>
-        <div class="quick-options" id="quick-tone-menu" role="menu" aria-label="Preset tone" hidden></div>
-      </div>
-      <button class="btn-run" id="btn-run" title="Transform & Polish (Option+J / Alt+J)">✨ Polish</button>
-      <button id="btn-undo" title="Undo & Restore Original" aria-label="Undo & Restore Original"><span class="undo-icon" aria-hidden="true">↩︎</span></button>
-      <button id="btn-settings" title="API & Advanced Settings">⚙️</button>
-    </div>
+  function uiElement(tag, attributes, ...children) {
+    const element = document.createElement(tag);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+    element.append(...children);
+    return element;
+  }
 
-    <div class="toast" id="toast" role="status"></div>
+  function quickPicker(id, label) {
+    const menuId = `${id}-menu`;
+    return uiElement('div', { class: 'quick-picker' },
+      uiElement('button', {
+        class: 'quick-trigger', id, type: 'button', 'aria-haspopup': 'menu',
+        'aria-expanded': 'false', 'aria-controls': menuId
+      }),
+      uiElement('div', { class: 'quick-options', id: menuId, role: 'menu', 'aria-label': label, hidden: '' })
+    );
+  }
 
-    <div class="modal-backdrop" id="modal-backdrop">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <h3 id="settings-title">AI Translation & Tone Settings</h3>
-        <fieldset id="settings-fields">
-          <div class="field">
-            <label for="cfg-provider">API Provider</label>
-            <select id="cfg-provider">
-              <option value="cohere">Cohere API (Native v2)</option>
-              <option value="gemini">Google Gemini API (Native)</option>
-              <option value="openai">OpenAI-Compatible API (OpenAI / DeepSeek / Ollama)</option>
-            </select>
-          </div>
+  function settingsField(label, control) {
+    return uiElement('div', { class: 'field' }, uiElement('label', { for: control.id }, label), control);
+  }
 
-          <div id="cohere-fields">
-            <div class="field">
-              <label for="cfg-cohere-key">Cohere API Key</label>
-              <button class="btn-key" type="button" id="cfg-cohere-key" data-config-key="cohereApiKey">Enter API key</button>
-            </div>
-            <div class="field">
-              <label for="cfg-cohere-model">Cohere Model</label>
-              <input type="text" id="cfg-cohere-model" placeholder="${DEFAULT_CONFIG.cohereModel}" />
-            </div>
-          </div>
+  function textField(id, label, placeholder) {
+    return settingsField(label, uiElement('input', { id, type: 'text', placeholder }));
+  }
 
-          <div id="gemini-fields">
-            <div class="field">
-              <label for="cfg-gemini-key">Gemini API Key</label>
-              <button class="btn-key" type="button" id="cfg-gemini-key" data-config-key="geminiApiKey">Enter API key</button>
-            </div>
-            <div class="field">
-              <label for="cfg-gemini-model">Gemini Model</label>
-              <input type="text" id="cfg-gemini-model" placeholder="${DEFAULT_CONFIG.geminiModel}" />
-            </div>
-          </div>
+  function keyField(id, label, configKey) {
+    return settingsField(label,
+      uiElement('button', { class: 'btn-key', type: 'button', id, 'data-config-key': configKey }, 'Enter API key')
+    );
+  }
 
-          <div id="openai-fields">
-            <div class="field">
-              <label for="cfg-openai-url">OpenAI-Compatible Base URL</label>
-              <input type="text" id="cfg-openai-url" placeholder="${DEFAULT_CONFIG.openaiBaseUrl}" />
-            </div>
-            <div class="field">
-              <label for="cfg-openai-key">API Key (if required by your server)</label>
-              <button class="btn-key" type="button" id="cfg-openai-key" data-config-key="openaiApiKey">Enter API key</button>
-            </div>
-            <div class="field">
-              <label for="cfg-openai-model">Model Name</label>
-              <input type="text" id="cfg-openai-model" placeholder="${DEFAULT_CONFIG.openaiModel}" />
-            </div>
-          </div>
+  shadow.append(
+    uiElement('div', { class: 'pill', id: 'pill' },
+      uiElement('span', { class: 'drag-handle', id: 'drag-handle', title: 'Drag to move (double-click to reset)' }, '⠿'),
+      quickPicker('quick-lang', 'Target language'),
+      uiElement('div', { class: 'divider' }),
+      quickPicker('quick-tone', 'Preset tone'),
+      uiElement('button', { class: 'btn-run', id: 'btn-run', type: 'button', title: 'Transform & Polish (Option+J / Alt+J)' }, '✨ Polish'),
+      uiElement('button', { id: 'btn-undo', type: 'button', title: 'Undo & Restore Original', 'aria-label': 'Undo & Restore Original' },
+        uiElement('span', { class: 'undo-icon', 'aria-hidden': 'true' }, '↩︎')
+      ),
+      uiElement('button', { id: 'btn-settings', type: 'button', title: 'API & Advanced Settings' }, '⚙️')
+    ),
+    uiElement('div', { class: 'toast', id: 'toast', role: 'status' }),
+    uiElement('div', { class: 'modal-backdrop', id: 'modal-backdrop' },
+      uiElement('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'settings-title' },
+        uiElement('h3', { id: 'settings-title' }, 'AI Translation & Tone Settings'),
+        uiElement('fieldset', { id: 'settings-fields' },
+          settingsField('API Provider', uiElement('select', { id: 'cfg-provider' },
+            uiElement('option', { value: 'cohere' }, 'Cohere API (Native v2)'),
+            uiElement('option', { value: 'gemini' }, 'Google Gemini API (Native)'),
+            uiElement('option', { value: 'openai' }, 'OpenAI-Compatible API (OpenAI / DeepSeek / Ollama)')
+          )),
+          uiElement('div', { id: 'cohere-fields' },
+            keyField('cfg-cohere-key', 'Cohere API Key', 'cohereApiKey'),
+            textField('cfg-cohere-model', 'Cohere Model', DEFAULT_CONFIG.cohereModel)
+          ),
+          uiElement('div', { id: 'gemini-fields' },
+            keyField('cfg-gemini-key', 'Gemini API Key', 'geminiApiKey'),
+            textField('cfg-gemini-model', 'Gemini Model', DEFAULT_CONFIG.geminiModel)
+          ),
+          uiElement('div', { id: 'openai-fields' },
+            textField('cfg-openai-url', 'OpenAI-Compatible Base URL', DEFAULT_CONFIG.openaiBaseUrl),
+            keyField('cfg-openai-key', 'API Key (if required by your server)', 'openaiApiKey'),
+            textField('cfg-openai-model', 'Model Name', DEFAULT_CONFIG.openaiModel)
+          ),
+          settingsField('Custom Persona Prompt (active when "Custom Persona" is selected)', uiElement('textarea', {
+            id: 'cfg-custom-prompt', rows: '2',
+            placeholder: 'e.g., Reply in the voice of a Victorian aristocrat with a touch of refined arrogance.'
+          })),
+          uiElement('label', { class: 'checkbox-row' },
+            uiElement('input', { type: 'checkbox', id: 'cfg-intercept-enter' }),
+            uiElement('span', {}, 'Polish with Enter')
+          ),
+          uiElement('div', { class: 'test-status', id: 'test-status', role: 'status' }),
+          uiElement('div', { class: 'modal-actions' },
+            uiElement('button', { class: 'btn-test', id: 'btn-test', type: 'button' }, 'Test API'),
+            uiElement('button', { class: 'btn-cancel', id: 'btn-cancel', type: 'button' }, 'Cancel'),
+            uiElement('button', { class: 'btn-save', id: 'btn-save', type: 'button' }, 'Save Settings')
+          )
+        )
+      )
+    )
+  );
 
-          <div class="field">
-            <label for="cfg-custom-prompt">Custom Persona Prompt (active when "Custom Persona" is selected)</label>
-            <textarea id="cfg-custom-prompt" rows="2" placeholder="e.g., Reply in the voice of a Victorian aristocrat with a touch of refined arrogance."></textarea>
-          </div>
-
-          <label class="checkbox-row">
-            <input type="checkbox" id="cfg-intercept-enter" />
-            <span>Polish with Enter</span>
-          </label>
-
-          <div class="test-status" id="test-status" role="status"></div>
-
-          <div class="modal-actions">
-            <button class="btn-test" id="btn-test" type="button">Test API</button>
-            <button class="btn-cancel" id="btn-cancel" type="button">Cancel</button>
-            <button class="btn-save" id="btn-save" type="button">Save Settings</button>
-          </div>
-        </fieldset>
-      </div>
-    </div>
-  `;
-
-  // Use Constructable Stylesheets so strict CSP style-src sites (e.g. Mastodon) allow Shadow DOM styling
   try {
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(SHADOW_CSS);
@@ -753,8 +747,6 @@
     styleEl.textContent = SHADOW_CSS;
     shadow.appendChild(styleEl);
   }
-  document.documentElement.appendChild(host);
-
   const pill = shadow.getElementById('pill');
   const dragHandle = shadow.getElementById('drag-handle');
   const btnRun = shadow.getElementById('btn-run');
@@ -838,6 +830,7 @@
       pill.classList.remove('visible');
       return;
     }
+    if (!host.isConnected) document.documentElement.appendChild(host);
     pill.classList.add('visible');
     const pillRect = pill.getBoundingClientRect();
     const maxLeft = Math.max(8, window.innerWidth - pillRect.width - 8);
@@ -871,7 +864,6 @@
     });
   }
 
-  // Keep pointer interactions in the toolbar from blurring the editor.
   pill.addEventListener('mousedown', (e) => e.preventDefault());
   pill.addEventListener('click', (e) => {
     if (!e.target.closest('.quick-picker')) closeQuickMenu();
@@ -1265,6 +1257,14 @@
     updateUndoButton();
     updatePillPosition();
   }
+
+  window.addEventListener('click', (e) => {
+    const editor = getEditor(e.composedPath()[0]);
+    if (editor && (editor !== activeInput || !host.isConnected || !pill.classList.contains('visible')) &&
+      editor === getFocusedEditor()) {
+      activateEditor(editor);
+    }
+  }, true);
 
   document.addEventListener(
     'focusin',
